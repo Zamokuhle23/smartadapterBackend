@@ -1,0 +1,7 @@
+Migrations for 'rag':
+  apps\rag\migrations\0002_documentchunk_page_number_documentfigure.py
+    + Add field page_number to documentchunk
+    + Create model DocumentFigure
+Migrations for 'quiz':
+  apps\quiz\migrations\0004_quizquestion_figures.py
+    + Add field figures to quizquestion

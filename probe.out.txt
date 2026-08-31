@@ -1,0 +1,6 @@
+mistralai/mistral-nemo                     ERR {'message': 'Provider timed out after 5011ms', 'code': 504}
+ibm-granite/granite-4.0-h-micro            1.5s -> OK
+meta-llama/llama-3.1-8b-instruct           5.7s -> OK
+inclusionai/ling-3.0-flash                 1.4s -> OK
+qwen/qwen3.7-flash                         1.9s -> OK
+openai/gpt-oss-20b                         5.2s -> OK

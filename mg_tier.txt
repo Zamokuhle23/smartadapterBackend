@@ -1,0 +1,4 @@
+Operations to perform:
+  Apply all migrations: accounts, admin, auth, contenttypes, progress, quiz, rag, sessions, syllabus, tutoring
+Running migrations:
+  Applying syllabus.0005_enrollment_tier_subject_tiers_available... OK

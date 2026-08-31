@@ -1,0 +1,4 @@
+Operations to perform:
+  Apply all migrations: accounts, admin, auth, contenttypes, progress, quiz, rag, sessions, syllabus, tutoring
+Running migrations:
+  Applying syllabus.0007_learningobjective_code_topic_code_topic_kind_and_more... OK

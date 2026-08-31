@@ -1,0 +1,26 @@
+# FundzaAI backend
+Django>=5.1,<5.2
+djangorestframework>=3.15
+djangorestframework-simplejwt>=5.3
+channels[daphne]>=4.1
+channels-redis>=4.2
+celery>=5.4
+redis>=5.0
+python-dotenv>=1.0
+
+# Database (production: PostgreSQL + pgvector)
+psycopg[binary]>=3.2
+pgvector>=0.3
+
+# Document ingestion
+pypdf>=4.0
+python-docx>=1.1
+
+# In-process open-source embeddings (EMBEDDING_PROVIDER=local)
+# Tip (Windows/Linux): to avoid the ~2.5GB CUDA torch, install CPU-only first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+sentence-transformers>=3.0
+
+# Optional semantic embeddings / LangChain ecosystem (Phase 2 upgrades)
+# langchain>=0.2
+# llama-index>=0.10

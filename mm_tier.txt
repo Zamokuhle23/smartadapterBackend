@@ -1,0 +1,4 @@
+Migrations for 'syllabus':
+  apps\syllabus\migrations\0005_enrollment_tier_subject_tiers_available.py
+    + Add field tier to enrollment
+    + Add field tiers_available to subject

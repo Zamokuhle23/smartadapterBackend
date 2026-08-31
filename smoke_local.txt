@@ -1,0 +1,8 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|##########| 199/199 [00:00<00:00, 5296.98it/s]
+[1] Ingestion OK - 3 chunks embedded
+[2] BKT OK - mastery path after correct/correct/wrong: 0.6657 -> 0.8959 -> 0.6042
+[3] Tutor reply OK - retrieved 3 chunks, 2192 chars, weaknesses woven into prompt
+[4] Dashboard OK - weakest subject: Mathematics @ 59%; top recommendation: 'review' on 'Simplify algebraic fractions...'
+
+ALL SMOKE TESTS PASSED

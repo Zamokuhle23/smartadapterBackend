@@ -1,0 +1,720 @@
+"""
+LLM-based question generation grounded in the RAG corpus.
+
+Practice questions are, wherever possible, VARIATIONS of real ECESWA
+past-paper items retrieved from indexed past papers: same paper format,
+same command words and mark allocation, fresh numbers/context. Items that
+no past paper covers are freshly generated but still syllabus-aligned.
+Every question records its provenance (paper label, year, adapted flag)
+so students always know what they are practising.
+
+Exam simulation builds a blueprint (topic weightings + formats) from the
+syllabus assessment scheme and generates questions lazily - one LLM call
+per question - so each request stays within normal latency budgets.
+
+The provider adapter is reused, so with an OpenRouter key configured this
+uses the real LLM; without one it raises a clear error (we never fake exam
+questions from nothing).
+"""
+
+import json
+import random
+import re
+
+from apps.rag.services.retriever import retrieve
+from apps.syllabus.models import SyllabusDocument, Topic
+from apps.syllabus.services.subject_map import SOURCE_PRIORITY
+
+from ..models import ExamBlueprint, ExamSession, QuizQuestion
+
+PRACTICE_PROMPT = """You are an experienced Eswatini {level} examiner writing practice
+questions for {subject_name} (ECESWA code {subject_code}).
+
+INDEXED CORPUS CHUNKS (official syllabus text plus real past-paper items from BOTH
+Cambridge IGCSE and ECESWA EGCSE; each is labelled with its source document and type):
+{context}
+
+Write exactly {count} question(s) at difficulty level {difficulty_text}
+(1=easy recall, 5=challenging application).
+{objective_line}{style_line}
+Rules:
+- If a chunk from a PAST PAPER covers the target skill, base your question on it:
+  write a VARIATION that keeps the same topic, skill, command words ("Calculate...",
+  "Simplify...", "Explain..."), structure and mark allocation, but changes numbers,
+  context or data. Set "adapted_from_past_paper": true and copy that item's exact
+  "source_paper" and "source_year" labels. Do NOT copy the original wording verbatim.
+- {source_instruction}
+- Only if no past-paper chunk fits, write a fresh syllabus-aligned question with
+  "adapted_from_past_paper": false, "source_paper": "" and no year.
+- Match the format of the source paper: multiple choice where the real Paper 1
+  uses it; structured/long-form where Papers 2+ use it.
+  Set "format" to "mcq" or "structured" accordingly.
+- Diagrams and figures (three cases):
+  * If the item has a DIAGRAM/FIGURE/GRAPH whose labels or values are the SAME
+    for every variant (anatomy to label, a graph to read off, a shape to compare),
+    REUSE the real figure's exact labels and numbers - vary only the wording around
+    it. Set "figure_required": true and reference the visual in the question text
+    with words like "(see diagram)" or "In the diagram...".
+  * If the figure's numbers would need to change with your variant (e.g. a circuit
+    with different resistor values, a triangle with new side lengths), DO NOT rely on
+    the real image. Instead DRAW the changed figure inside the question text using
+    monospace ASCII art (dots, dashes, symbols, letters) - a triangle, number line,
+    both axes, or a simple labelled diagram - so every variant gets its own fresh,
+    internally-consistent figure. Set "figure_required": false for this. Never leave
+    a bare "see diagram" with no description or drawing.
+  * Never invent a figure, label or value that is not implied by the source chunk.
+- MCQ: exactly 4 options, only ONE clearly correct, distractors based on real
+  misconceptions. Structured: no options array (use []), realistic "marks".
+- "marking_guidance": model answer plus how marks would be awarded (needed for grading).
+- Never invent a paper label or year that is not shown on the source chunk.
+
+Return ONLY a valid JSON array, no markdown fences, in this exact shape:
+[{{"question": "...", "format": "mcq", "options": ["...","...","...","..."],
+"correct_index": 0, "marks": 3, "explanation": "why the answer is correct",
+"marking_guidance": "model answer + mark breakdown", "paper_label": "Paper 2",
+"source_year": 2021, "source": "igcse", "adapted_from_past_paper": true,
+"figure_required": true,
+"objective_hint": "short topic label", "difficulty": 2}}]"""
+
+
+EXAM_BLUEPRINT_PROMPT = """You are an Eswatini examinations specialist who knows the
+ECESWA {level} {subject_name} ({subject_code}) assessment scheme in detail.
+
+ASSESSMENT-SCHEME CONTEXT from this subject's official syllabus:
+{context}
+
+Describe the structure of {paper_text} so an app can simulate it faithfully:
+- Which topics appear, in what proportion (mark weightings exactly as the syllabus
+  states them, e.g. if algebra carries 25% of the paper, weight_pct = 25).
+- The question count, duration, and per-section format ("mcq" or "structured")
+  matching how the REAL paper is set (e.g. Paper 1 is typically all multiple choice).
+
+Return ONLY valid JSON, no fences:
+{{"paper_label": "{paper_text}", "duration_minutes": 120, "total_questions": 12,
+"sections": [{{"topic": "Algebraic expressions", "weight_pct": 25, "questions": 3,
+"format": "structured"}}]}}
+Sections must cover the whole paper (weights summing to ~100)."""
+
+EXAM_QUESTION_PROMPT = """You are an experienced Eswatini {level} examiner setting
+{paper_label} for {subject_name} (ECESWA code {subject_code}). This is a simulated
+exam sitting - questions must look exactly like real {paper_label} items.
+
+TOPIC FOR THIS QUESTION: {topic}
+FORMAT REQUIRED: {format_text}
+Question number: {number} of {total}. Difficulty level {difficulty} (1..5).
+{style_line}
+SYLLABUS CONTEXT (the ONLY content you may test):
+{context}
+
+Rules:
+- Use authentic exam phrasing and command words for this paper.
+- MCQ: exactly 4 options, one clearly correct, misconception-based distractors.
+- Structured: multi-part where typical for this paper, realistic marks, no options ([]).
+- "marking_guidance": full model answer + mark allocation per part.
+- If the item for this topic uses a DIAGRAM/FIGURE: if its labels/values stay the same
+  for every sitting (anatomy to label, a graph to read off), REUSE them and set
+  "figure_required": true. If the numbers would vary, DRAW the changed figure inside
+  the question text as monospace ASCII art (triangle, axes, number line) and set
+  "figure_required": false. Never a bare "see diagram".
+
+Return ONLY a valid JSON object, no fences:
+{{"question": "...", "format": "mcq", "options": ["...","...","...","..."],
+"correct_index": 0, "marks": 4, "explanation": "worked solution",
+"marking_guidance": "model answer + mark breakdown", "objective_hint": "short topic label",
+"figure_required": false}}"""
+
+GRADE_PROMPT = """You are an ECESWA examiner marking a student's written answer.
+
+QUESTION ({marks} marks):
+{question}
+
+MARKING GUIDANCE (authoritative):
+{guidance}
+
+STUDENT ANSWER:
+{answer}
+
+Mark strictly but fairly against the guidance. Award partial credit where some
+marks were earned. Return ONLY valid JSON, no fences:
+{{"awarded": <number>, "max": {marks}, "feedback": "specific feedback citing what
+earned marks and what was missing"}}"""
+
+
+class QuizGenerationError(Exception):
+    pass
+
+
+def _extract_json(text: str, open_char: str = "[", close_char: str = "]"):
+    text = text.strip()
+    text = re.sub(r"^```(json)?|```$", "", text, flags=re.MULTILINE).strip()
+    start, end = text.find(open_char), text.rfind(close_char)
+    if start == -1 or end == -1 or end < start:
+        raise QuizGenerationError("Model did not return JSON")
+    try:
+        parsed = json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise QuizGenerationError(f"Model returned invalid JSON: {exc}") from exc
+    if isinstance(parsed, dict) and open_char == "[":
+        return [parsed]  # tolerate a single object where an array was expected
+    return parsed
+
+
+def _extract_json_array(text: str) -> list:
+    return _extract_json(text, "[", "]")
+
+
+def _extract_json_object(text: str) -> dict:
+    return _extract_json(text, "{", "}")
+
+
+def _chat(messages: list[dict]) -> str:
+    from apps.rag.services.llm import get_chat_provider
+
+    raw = get_chat_provider().chat(messages)
+    if "[offline mode" in raw:
+        raise QuizGenerationError(
+            "No LLM configured - set OPENROUTER_API_KEY to generate questions."
+        )
+    return raw
+
+
+def _chunk_source_line(chunk) -> str:
+    doc = getattr(chunk, "document", None)
+    if doc is None:
+        return f"[chunk {chunk.ordinal} | source: unknown]"
+    parts = [f"source: {doc.title}", f"type: {doc.doc_type}"]
+    # Cambridge IGCSE (primary) vs ECESWA EGCSE (secondary)
+    parts.append(_source_name(doc.source))
+    if doc.paper_number:
+        parts.append(f"Paper {doc.paper_number}")
+    if doc.year:
+        parts.append(str(doc.year))
+    return f"[chunk {chunk.ordinal} | {' | '.join(parts)}]"
+
+
+def _source_name(source) -> str:
+    """Human label for a document's provenance source."""
+    if source == SyllabusDocument.Source.IGCSE:
+        return "Cambridge IGCSE"
+    if source == SyllabusDocument.Source.EGCSE:
+        return "ECESWA EGCSE"
+    return "syllabus"
+
+
+def _chunk_source(chunk) -> str:
+    """Normalised source key for a chunk ('igcse'/'egcse'/'passage')."""
+    doc = getattr(chunk, "document", None)
+    if doc is None:
+        return ""
+    return getattr(doc, "source", "") or ""
+
+
+def _infer_source_from_chunks(chunks) -> str:
+    """Majority past-paper source among the chunks a question was grounded on."""
+    sources = [_chunk_source(c) for c in chunks if _chunk_source(c) in (
+        SyllabusDocument.Source.IGCSE, SyllabusDocument.Source.EGCSE,
+    )]
+    if not sources:
+        return ""
+    return max(set(sources), key=sources.count)
+
+
+def _preferred_source(past_paper_source_keys: list) -> str:
+    """
+    Weighted 70/30 pick between Cambridge IGCSE (primary) and ECESWA EGCSE
+    (secondary), but only among sources that actually have past-paper chunks so
+    we never force a source with nothing to offer.
+    """
+    available = set(past_paper_source_keys)
+    weights = {s: SOURCE_PRIORITY[s] for s in available if s in SOURCE_PRIORITY}
+    if not weights:
+        return ""
+    keys = list(weights)
+    probs = [weights[k] for k in keys]
+    return random.choices(keys, weights=probs, k=1)[0]
+
+
+def _source_instruction(preferred: str) -> str:
+    if preferred == SyllabusDocument.Source.IGCSE:
+        return (
+            "PREFERRED SOURCE: Cambridge IGCSE. Prefer adapting a Cambridge IGCSE "
+            "past-paper chunk; tag the item \"source\": \"igcse\". EGCSE chunks are used "
+            "only when no Cambridge chunk fits."
+        )
+    if preferred == SyllabusDocument.Source.EGCSE:
+        return (
+            "PREFERRED SOURCE: ECESWA EGCSE. Prefer adapting an ECESWA EGCSE past-paper "
+            "chunk; tag the item \"source\": \"egcse\"."
+        )
+    return (
+        "Adapt whichever past-paper chunk best fits. Set \"source\": \"igcse\" for "
+        "Cambridge items and \"egcse\" for ECESWA items."
+    )
+
+
+def _past_paper_chunks(chunks) -> list:
+    return [
+        c
+        for c in chunks
+        if getattr(c, "document", None) is not None
+        and c.document.doc_type == SyllabusDocument.DocType.PAST_PAPER
+    ]
+
+
+def _filter_chunks_by_tier(chunks, tier: str) -> list:
+    """
+    For a tiered subject, keep only chunks from the papers the student's tier sits.
+    Core -> Papers 1 & 2 ; Extended -> Papers 3 & 4. Un-tiered subjects pass through.
+    """
+    from apps.syllabus.services.subject_map import tier_papers
+
+    if not tier:
+        return chunks
+    papers = tier_papers(tier)
+    if not papers:
+        return chunks
+    return [
+        c
+        for c in chunks
+        if not getattr(c, "document", None)
+        or not c.document.paper_number
+        or c.document.paper_number in papers
+    ]
+
+
+def _prioritise_past_papers(chunks: list, k: int, preferred_source: str = "") -> list:
+    """
+    Surface past-paper chunks first; within past papers, prefer the chosen
+    source (Cambridge IGCSE 70% / ECESWA EGCSE 30%) by moving its chunks to the
+    front. Everything still respects the original similarity ranking within group.
+    """
+    pp = _past_paper_chunks(chunks)
+    papers = set(id(c) for c in pp)
+    if preferred_source:
+        preferred = [c for c in pp if _chunk_source(c) == preferred_source]
+        other = [c for c in pp if _chunk_source(c) != preferred_source]
+        reordered_pp = preferred + other
+    else:
+        reordered_pp = pp
+    ordered = [c for c in reordered_pp if id(c) in papers] + [
+        c for c in chunks if id(c) not in papers
+    ]
+    return ordered[:k]
+
+
+def _build_context(chunks) -> str:
+    return "\n---\n".join(f"{_chunk_source_line(c)}\n{c.text}" for c in chunks)
+
+
+def generate_questions(subject, count: int = 3, difficulty: int | None = None,
+                       objective=None, tier: str = "") -> list[QuizQuestion]:
+    """Adaptive practice questions: past-paper variations first."""
+    count = max(1, min(int(count), 10))
+    query = objective.statement if objective else (
+        f"{subject.name} past exam questions typical examination items"
+    )
+    raw_chunks = retrieve(subject.syllabus, query, k=16, subject=subject)
+    raw_chunks = _filter_chunks_by_tier(raw_chunks, tier)
+    pp_sources = [_chunk_source(c) for c in _past_paper_chunks(raw_chunks)]
+    preferred = _preferred_source(pp_sources)
+    chunks = _prioritise_past_papers(raw_chunks, k=6, preferred_source=preferred)
+    context = _build_context(chunks) if chunks else "(no indexed corpus)"
+    difficulty = difficulty or 2
+    source_instruction = _source_instruction(preferred) if preferred else (
+        "Adapt whichever past-paper chunk fits; set \"source\" to \"igcse\" or \"egcse\"."
+    )
+
+    prompt = PRACTICE_PROMPT.format(
+        level=subject.syllabus.get_level_display(),
+        subject_name=subject.name,
+        subject_code=subject.code,
+        context=context[:6000],
+        count=count,
+        difficulty_text=difficulty,
+        objective_line=(
+            f"\nTarget this specific learning objective: \"{objective.statement}\"\n"
+            if objective else "\nCover skills the past papers emphasise.\n"
+        ),
+        style_line="",
+        source_instruction=source_instruction,
+    )
+    raw = _chat(
+        [
+            {"role": "system", "content": "You write syllabus-accurate exam questions. Output ONLY valid JSON."},
+            {"role": "user", "content": prompt},
+        ]
+    )
+
+    items = _extract_json_array(raw)
+    created = []
+    for item in items:
+        q = _question_from_item(subject, item, objective, chunks, default_difficulty=difficulty)
+        if q is not None:
+            created.append(q)
+    if not created:
+        raise QuizGenerationError("All generated questions were malformed - try again.")
+    return created
+
+
+def _question_from_item(subject, item: dict, objective, chunks,
+                        default_difficulty: int = 2,
+                        force_paper_label: str | None = None) -> QuizQuestion | None:
+    """Validate one LLM item dict and persist it as a QuizQuestion with provenance."""
+    fmt = str(item.get("format", "mcq")).lower()
+    if fmt not in (QuizQuestion.Format.MCQ, QuizQuestion.Format.STRUCTURED):
+        fmt = QuizQuestion.Format.MCQ
+    options = [str(o) for o in (item.get("options") or [])]
+
+    if not item.get("question"):
+        return None
+
+    correct = None
+    if fmt == QuizQuestion.Format.MCQ:
+        if len(options) < 2:
+            return None
+        try:
+            correct = int(item.get("correct_index"))
+        except (TypeError, ValueError):
+            return None
+        if not (0 <= correct < len(options)):
+            return None
+    else:
+        options = []
+
+    def _int(value, default):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    marks = max(1, min(25, _int(item.get("marks"), 1)))
+    difficulty = max(1, min(5, _int(item.get("difficulty"), default_difficulty)))
+
+    adapted = bool(item.get("adapted_from_past_paper"))
+    if force_paper_label:
+        # Exam simulation: the label mirrors the simulated paper's format,
+        # it does not claim the item was copied from a real past paper.
+        paper_label = str(force_paper_label)[:40]
+        adapted = False
+    else:
+        paper_label = str(item.get("paper_label") or "")[:40] if adapted else ""
+    source_year = _int(item.get("source_year"), 0) or None
+
+    # Provenance source (Cambridge IGCSE vs ECESWA EGCSE). Trust an explicit
+    # model tag when valid, otherwise infer from the past-paper chunks used.
+    source = ""
+    if adapted:
+        explicit = str(item.get("source") or "").lower()
+        if explicit in (SyllabusDocument.Source.IGCSE, SyllabusDocument.Source.EGCSE):
+            source = explicit
+        else:
+            source = _infer_source_from_chunks(chunks)
+
+    question = QuizQuestion.objects.create(
+        subject=subject,
+        objective=objective,
+        topic_title=str(item.get("objective_hint", ""))[:300],
+        difficulty=difficulty,
+        format=fmt,
+        question_text=str(item["question"]),
+        options=options,
+        correct_index=correct,
+        explanation=str(item.get("explanation", "")),
+        marks=marks,
+        marking_guidance=str(item.get("marking_guidance", "")),
+        paper_label=paper_label,
+        source_year=source_year,
+        source=source,
+        adapted_from_past_paper=adapted,
+        source_chunk_ids=[c.id for c in chunks],
+    )
+    figure_required = bool(item.get("figure_required"))
+    if figure_required and (adapted or force_paper_label):
+        _attach_figures(question, chunks)
+    return question
+
+
+def _attach_figures(question, chunks):
+    """
+    Attach the source paper's page images to a generated question whose grounding
+    chunks come from pages that contain figures. Only called when the model flagged
+    figure_required=true, so the real image is attached ONLY for diagram-interpretation
+    questions (label/identify/read-off) where the figure is the tested subject, and
+    NOT for numeric variants that draw their own changed figure in markup.
+    """
+    from apps.rag.models import DocumentFigure
+
+    if not chunks:
+        return
+    # Group chunk pages by document so we can query for the figures once.
+    wanted = set()
+    for chunk in chunks:
+        if getattr(chunk, "document_id", None) and getattr(chunk, "page_number", None):
+            wanted.add((chunk.document_id, chunk.page_number))
+    if not wanted:
+        return
+    figure_ids = []
+    for document_id, page_number in wanted:
+        figure_ids.extend(
+            DocumentFigure.objects.filter(
+                document_id=document_id, page_number=page_number
+            ).values_list("id", flat=True)
+        )
+    if figure_ids:
+        question.figures.set(figure_ids[:6])  # cap at ~6 figures per question
+
+
+# --------------------------------------------------------------------------
+# Exam simulation
+# --------------------------------------------------------------------------
+
+def _norm_topic(title: str) -> str:
+    """Normalise a topic title for overlap matching (lowercase, collapse)."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", title.lower()).split())
+
+
+def _topic_overlap(a: str, b: str) -> bool:
+    """True if two topic titles share meaningful tokens (>= half the short one)."""
+    ta, tb = a.split(), b.split()
+    if not ta or not tb:
+        return False
+    common = set(ta) & set(tb)
+    return len(common) >= max(1, min(len(ta), len(tb)) // 2)
+
+
+def get_exam_blueprint(subject, paper_number: int = 1, tier: str = "") -> dict:
+    """
+    Return (building/caching) the exam blueprint for this subject + paper:
+    topic weightings, question counts and formats mirroring the real paper.
+    """
+    cached = ExamBlueprint.objects.filter(subject=subject, paper_number=paper_number).first()
+    if cached:
+        data = dict(cached.data)
+        data["tier"] = tier or data.get("tier", "")
+        return data
+
+    # For tiered subjects, only pull assessment context that belongs to this tier,
+    # so the blueprint mirrors the tier's papers (Core=1,2 / Extended=3,4).
+    context_chunks = retrieve(
+        subject.syllabus,
+        f"assessment scheme weighting of marks {subject.name} paper {paper_number} "
+        f"structure duration sections topics",
+        k=8,
+        subject=subject,
+    )
+    context_chunks = _filter_chunks_by_tier(context_chunks, tier)
+    paper_text = f"Paper {paper_number}"
+    data = None
+    try:
+        raw = _chat(
+            [
+                {"role": "system", "content": "You describe exam structures precisely. Output ONLY valid JSON."},
+                {"role": "user", "content": EXAM_BLUEPRINT_PROMPT.format(
+                    level=subject.syllabus.get_level_display(),
+                    subject_name=subject.name,
+                    subject_code=subject.code,
+                    context=_build_context(context_chunks)[:4000] or "(no indexed corpus)",
+                    paper_text=paper_text,
+                )},
+            ]
+        )
+        data = _extract_json_object(raw)
+    except QuizGenerationError:
+        data = None
+
+    blueprint = _normalise_blueprint(subject, data, paper_number)
+    ExamBlueprint.objects.update_or_create(
+        subject=subject, paper_number=paper_number, defaults={"data": blueprint}
+    )
+    return blueprint
+
+
+def _normalise_blueprint(subject, data: dict | None, paper_number: int) -> dict:
+    """Sanitise the LLM's blueprint (or synthesise an even topic split as fallback)."""
+    paper_label = f"Paper {paper_number}"
+
+    def fallback() -> dict:
+        topics = list(Topic.objects.filter(subject=subject)[:10])
+        n = len(topics) or 1
+        per = max(1, 10 // n)
+        sections = [
+            {"topic": t.title, "weight_pct": round(100 / n), "questions": per, "format": "structured"}
+            for t in topics
+        ] or [{"topic": subject.name, "weight_pct": 100, "questions": 5, "format": "structured"}]
+        return {
+            "paper_label": paper_label,
+            "duration_minutes": 120,
+            "total_questions": sum(s["questions"] for s in sections),
+            "sections": sections,
+        }
+
+    if not isinstance(data, dict) or not data.get("sections"):
+        return fallback()
+
+    sections = []
+    for s in data["sections"]:
+        if not isinstance(s, dict) or not s.get("topic"):
+            continue
+        fmt = str(s.get("format", "structured")).lower()
+        if fmt not in (QuizQuestion.Format.MCQ, QuizQuestion.Format.STRUCTURED):
+            fmt = QuizQuestion.Format.STRUCTURED
+        try:
+            questions = max(1, int(s.get("questions", 1)))
+        except (TypeError, ValueError):
+            questions = 1
+        sections.append(
+            {
+                "topic": str(s["topic"])[:300],
+                "weight_pct": s.get("weight_pct"),
+                "questions": questions,
+                "format": fmt,
+            }
+        )
+    if not sections:
+        return fallback()
+
+    # Ground the blueprint to the subject's REAL syllabus topics. When the model
+    # hallucinates topics from another subject (thin context for an un-seeded
+    # subject can produce a maths paper for e.g. Religious Education), reject the
+    # blueprint and fall back to the subject's actual topics.
+    real_topics = list(Topic.objects.filter(subject=subject).values_list("title", flat=True))
+    if not real_topics:
+        return fallback()
+    matches = sum(_topic_overlap(_norm_topic(s["topic"]), _norm_topic(rt)) for s in sections for rt in real_topics)
+    if matches < max(2, (len(sections) + 1) // 2):
+        return fallback()
+
+    try:
+        total = int(data.get("total_questions")) or sum(s["questions"] for s in sections)
+    except (TypeError, ValueError):
+        total = sum(s["questions"] for s in sections)
+    try:
+        duration = int(data.get("duration_minutes"))
+    except (TypeError, ValueError):
+        duration = 120
+
+    return {
+        "paper_label": str(data.get("paper_label") or paper_label)[:60],
+        "duration_minutes": max(15, min(240, duration)),
+        "total_questions": max(1, min(30, total)),
+        "sections": sections,
+    }
+
+
+def _flatten_queue(blueprint: dict) -> list[dict]:
+    """Expand sections into an ordered per-question queue honouring the weightings."""
+    queue: list[dict] = []
+    for section in blueprint["sections"]:
+        queue.extend([section] * section["questions"])
+    return queue
+
+
+def start_exam_session(user, subject, paper_number: int = 1, tier: str = "") -> ExamSession:
+    """Build/reuse the blueprint and open a new simulated exam sitting."""
+    blueprint = get_exam_blueprint(subject, paper_number, tier=tier)
+    return ExamSession.objects.create(
+        student=user,
+        subject=subject,
+        paper_number=paper_number,
+        title=f"{subject.name} ({subject.code}) - Paper {paper_number}",
+        duration_minutes=blueprint.get("duration_minutes"),
+        total_questions=blueprint.get("total_questions", 1),
+        plan={**blueprint, "tier": tier or blueprint.get("tier", ""), "queue": _flatten_queue(blueprint)},
+    )
+
+
+def next_exam_question(session: ExamSession) -> QuizQuestion | None:
+    """
+    Generate (lazily, one LLM call) the next question in the sitting,
+    following the blueprint queue. Returns None when the paper is finished.
+    """
+    if session.status == ExamSession.Status.COMPLETED:
+        return None
+    index = len(session.question_ids)
+    queue = session.plan.get("queue", [])
+    if index >= session.total_questions or index >= len(queue):
+        return None
+
+    entry = queue[index]
+    fmt = entry.get("format", QuizQuestion.Format.STRUCTURED)
+    context_chunks = retrieve(
+        session.subject.syllabus,
+        f"{session.subject.name} {entry['topic']} exam questions",
+        k=4,
+        subject=session.subject,
+    )
+    context_chunks = _filter_chunks_by_tier(context_chunks, session.plan.get("tier", ""))
+    prompt = EXAM_QUESTION_PROMPT.format(
+        level=session.subject.syllabus.get_level_display(),
+        subject_name=session.subject.name,
+        subject_code=session.subject.code,
+        paper_label=f"Paper {session.paper_number}",
+        topic=entry["topic"],
+        format_text=(
+            "multiple choice (MCQ)"
+            if fmt == QuizQuestion.Format.MCQ
+            else "structured / free response"
+        ),
+        number=index + 1,
+        total=session.total_questions,
+        difficulty=min(5, 2 + index * 3 // max(1, session.total_questions)),
+        style_line=(
+            "This paper uses MULTIPLE CHOICE throughout - every question must be mcq format."
+            if fmt == QuizQuestion.Format.MCQ
+            else "This paper uses STRUCTURED questions - include all parts and realistic marks."
+        ),
+        context=_build_context(context_chunks)[:4000] or "(no indexed corpus)",
+    )
+    raw = _chat(
+        [
+            {"role": "system", "content": "You write authentic exam questions. Output ONLY valid JSON."},
+            {"role": "user", "content": prompt},
+        ]
+    )
+
+    item = _extract_json_object(raw)
+    item["format"] = fmt  # blueprint wins over model drift
+    question = _question_from_item(
+        session.subject, item, None, context_chunks,
+        force_paper_label=f"Paper {session.paper_number}",
+    )
+    if question is None:
+        raise QuizGenerationError("Generated exam question was malformed - try again.")
+
+    ids = list(session.question_ids)
+    ids.append(question.id)
+    session.question_ids = ids
+    session.save(update_fields=["question_ids"])
+
+    if len(ids) >= session.total_questions:
+        from django.utils import timezone
+
+        session.status = ExamSession.Status.COMPLETED
+        session.completed_at = timezone.now()
+        session.save(update_fields=["status", "completed_at"])
+    return question
+
+
+def grade_structured_answer(question: QuizQuestion, answer_text: str) -> tuple[float, float, str]:
+    """Rubric-grade a free-response answer with the LLM. Returns (awarded, max, feedback)."""
+    max_marks = float(question.marks or 1)
+    prompt = GRADE_PROMPT.format(
+        marks=question.marks or 1,
+        question=question.question_text,
+        guidance=question.marking_guidance or question.explanation or "(none supplied)",
+        answer=answer_text[:3000],
+    )
+    raw = _chat(
+        [
+            {"role": "system", "content": "You mark exam scripts accurately. Output ONLY valid JSON."},
+            {"role": "user", "content": prompt},
+        ]
+    )
+    result = _extract_json_object(raw)
+    try:
+        awarded = float(result.get("awarded", 0))
+    except (TypeError, ValueError):
+        awarded = 0.0
+    awarded = max(0.0, min(max_marks, awarded))
+    feedback = str(result.get("feedback", ""))[:2000]
+    return awarded, max_marks, feedback

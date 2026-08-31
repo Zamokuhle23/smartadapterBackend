@@ -1,0 +1,13 @@
+Found 1662 PDFs under C:\work\FundzaAI\Resource\IGCSE_Papers
+  OK  0600_w17_ms_11 -> 6882: 38 chunks
+  OK  0600_w17_ms_13 -> 6882: 38 chunks
+  OK  0600_w17_qp_11 -> 6882: 38 chunks
+  SKIP 3015_s17_ms_11.pdf: no local EGCSE mapping for this Cambridge code (or unmapped)
+  SKIP 3015_s17_ms_12.pdf: no local EGCSE mapping for this Cambridge code (or unmapped)
+  SKIP 3015_s17_ms_21.pdf: no local EGCSE mapping for this Cambridge code (or unmapped)
+  SKIP 3015_s17_ms_22.pdf: no local EGCSE mapping for this Cambridge code (or unmapped)
+  SKIP 3015_s17_qp_11.pdf: no local EGCSE mapping for this Cambridge code (or unmapped)
+  SKIP 3015_s17_qp_12.pdf: no local EGCSE mapping for this Cambridge code (or unmapped)
+  SKIP 3015_s17_qp_21.pdf: no local EGCSE mapping for this Cambridge code (or unmapped)
+  SKIP 3015_s17_qp_22.pdf: no local EGCSE mapping for this Cambridge code (or unmapped)
+Done. 6 ingested, 8 skipped, 0 failed (source=igcse).

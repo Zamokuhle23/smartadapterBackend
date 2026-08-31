@@ -1,0 +1,7 @@
+Base URL : https://openrouter.ai/api/v1
+Model    : ibm-granite/granite-4.0-h-micro
+API key  : sk-or-v1...7089
+Provider : OpenAIChatProvider
+Reply    : FundzaAI connection OK
+
+LLM CONNECTION OK

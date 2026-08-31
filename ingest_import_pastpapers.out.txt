@@ -1,0 +1,50 @@
+Found 287 PDFs under C:\work\FundzaAI\backend\content\past_papers\egcse
+  SKIP ADD MATHS.pdf: not a question paper / mark scheme (notes)
+  SKIP FASHION  FABRICS.pdf: not a question paper / mark scheme (notes)
+  SKIP Past_Exam_Papers.pdf: could not infer an EGCSE subject from filename
+  OK  SISWATI 2ND LANG 2 -> 6870: 14 chunks
+  SKIP BS P1 -  MS.pdf: could not infer an EGCSE subject from filename
+  SKIP BS P2 - MS 2018 BS.pdf: could not infer an EGCSE subject from filename
+  SKIP Econ MS P1.pdf: could not infer an EGCSE subject from filename
+  SKIP Econ MS P2.pdf: could not infer an EGCSE subject from filename
+  OK  Literature P2 - MS  -> 6875: 19 chunks
+  SKIP Past_Exam_Papers.pdf: could not infer an EGCSE subject from filename
+  SKIP Physical PAPER 1 - MS.pdf: could not infer an EGCSE subject from filename
+  SKIP Physical PAPER 2 - M S.pdf: could not infer an EGCSE subject from filename
+  SKIP Physical PAPER 3 - M S.pdf: could not infer an EGCSE subject from filename
+  SKIP Physical PAPER 4 - M S.pdf: could not infer an EGCSE subject from filename
+  SKIP ADD MATHS.pdf: not a question paper / mark scheme (notes)
+  SKIP Past_Exam_Papers.pdf: could not infer an EGCSE subject from filename
+  SKIP SISWATI 1 - FIRST LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP SISWATI 1 - SECOND LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP SISWATI 2 - SECOND LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP SISWATI 2- FIRST LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP SISWATI 3 - FIRST LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP SISWATI 3 - SECOND LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP BS PAPER 1  MS.pdf: could not infer an EGCSE subject from filename
+  SKIP BS PAPER 2 - MS.pdf: could not infer an EGCSE subject from filename
+  SKIP ECON. PAPER 1 - MS.pdf: could not infer an EGCSE subject from filename
+  SKIP ECON. PAPER 2 - MS.pdf: could not infer an EGCSE subject from filename
+  OK  English language PAPER 1 - M S -> 6873: 11 chunks
+  SKIP Past_Exam_Papers.pdf: could not infer an EGCSE subject from filename
+  SKIP RE PAPER 1 - M S.pdf: could not infer an EGCSE subject from filename
+  SKIP RE PAPER 2 - M S.pdf: could not infer an EGCSE subject from filename
+  SKIP FASHIONFABRICS.pdf: not a question paper / mark scheme (notes)
+  OK  LITERATURE 2 -> 6875: 11 chunks
+  SKIP Past_Exam_Papers.pdf: could not infer an EGCSE subject from filename
+  SKIP SISWATI 1 FIRST LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP SISWATI 1 SECOND LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP SISWATI 2 FIRST LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP SISWATI 2 SECOND LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP SISWATI 3 FIRST LANGUAGE.pdf: not a question paper / mark scheme (notes)
+  SKIP EGCSE  R.E. PAPER 2 - M S.pdf: could not infer an EGCSE subject from filename
+  SKIP EGCSE R.E PAPER 1 - M S.pdf: could not infer an EGCSE subject from filename
+  SKIP First Language SiSwati P1_MS_2020.pdf: not a question paper / mark scheme (notes)
+  SKIP First Language SiSwati P2_MS_2020.pdf: not a question paper / mark scheme (notes)
+  SKIP Food and Nutrition P1_MS_2020.pdf: not a question paper / mark scheme (notes)
+  SKIP Past_Exam_Papers.pdf: could not infer an EGCSE subject from filename
+  OK  _Physical Science Paper 4 MS -> 6888: 10 chunks
+  OK  EGCSE First Language SiSwati 2021 Question Paper 3-1661939856 -> 6870: 61 chunks
+  SKIP Past_Exam_Papers.pdf: could not infer an EGCSE subject from filename
+  SKIP Past_Exam_Papers.pdf: could not infer an EGCSE subject from filename
+Done. 174 ingested, 113 skipped, 0 failed (source=egcse).

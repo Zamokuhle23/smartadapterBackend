@@ -1,0 +1,6 @@
+Migrations for 'syllabus':
+  apps\syllabus\migrations\0007_learningobjective_code_topic_code_topic_kind_and_more.py
+    + Add field code to learningobjective
+    + Add field code to topic
+    + Add field kind to topic
+    + Add field topic_areas to topic

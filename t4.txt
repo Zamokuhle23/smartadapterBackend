@@ -1,0 +1,139 @@
+Using existing test database for alias 'default'...
+Found 7 test(s).
+System check identified no issues (0 silenced).
+....C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\jwt\api_jwt.py:147: InsecureKeyLengthWarning: The HMAC key is 23 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+  return self._jws.encode(
+EEF
+======================================================================
+ERROR: test_enroll_and_workspace_roundtrip (apps.accounts.tests.AuthAndWorkspaceTests.test_enroll_and_workspace_roundtrip)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\work\FundzaAI\backend\apps\accounts\tests.py", line 27, in test_enroll_and_workspace_roundtrip
+    self.client.post(
+    ~~~~~~~~~~~~~~~~^
+        "/api/auth/register/",
+        ^^^^^^^^^^^^^^^^^^^^^^
+        {"username": "w", "password": "StrongPass99"},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        format="json",
+        ^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\test.py", line 295, in post
+    response = super().post(
+        path, data=data, format=format, content_type=content_type, **extra)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\test.py", line 209, in post
+    return self.generic('POST', path, data, content_type, **extra)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\test.py", line 233, in generic
+    return super().generic(
+           ~~~~~~~~~~~~~~~^
+        method, path, data, content_type, secure, **extra)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\test\client.py", line 676, in generic
+    return self.request(**r)
+           ~~~~~~~~~~~~^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\test.py", line 285, in request
+    return super().request(**kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\test.py", line 237, in request
+    request = super().request(**kwargs)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\test\client.py", line 1092, in request
+    self.check_exception(response)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\test\client.py", line 805, in check_exception
+    raise exc_value
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\core\handlers\base.py", line 197, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\views\generic\base.py", line 104, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\views.py", line 509, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\views.py", line 469, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\views.py", line 480, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\views.py", line 506, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\work\FundzaAI\backend\apps\accounts\api.py", line 23, in post
+    "refresh": str(refresh.refresh_token),
+                   ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'RefreshToken' object has no attribute 'refresh_token'
+
+======================================================================
+ERROR: test_register_returns_tokens_and_creates_profile (apps.accounts.tests.AuthAndWorkspaceTests.test_register_returns_tokens_and_creates_profile)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\work\FundzaAI\backend\apps\accounts\tests.py", line 15, in test_register_returns_tokens_and_creates_profile
+    response = self.client.post(
+        "/api/auth/register/",
+        {"username": "newkid", "password": "StrongPass99", "level": "EGCSE"},
+        format="json",
+    )
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\test.py", line 295, in post
+    response = super().post(
+        path, data=data, format=format, content_type=content_type, **extra)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\test.py", line 209, in post
+    return self.generic('POST', path, data, content_type, **extra)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\test.py", line 233, in generic
+    return super().generic(
+           ~~~~~~~~~~~~~~~^
+        method, path, data, content_type, secure, **extra)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\test\client.py", line 676, in generic
+    return self.request(**r)
+           ~~~~~~~~~~~~^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\test.py", line 285, in request
+    return super().request(**kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\test.py", line 237, in request
+    request = super().request(**kwargs)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\test\client.py", line 1092, in request
+    self.check_exception(response)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\test\client.py", line 805, in check_exception
+    raise exc_value
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\core\handlers\base.py", line 197, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\django\views\generic\base.py", line 104, in view
+    return self.dispatch(request, *args, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\views.py", line 509, in dispatch
+    response = self.handle_exception(exc)
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\views.py", line 469, in handle_exception
+    self.raise_uncaught_exception(exc)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\views.py", line 480, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\zamok\AppData\Local\Programs\Python\Python313\Lib\site-packages\rest_framework\views.py", line 506, in dispatch
+    response = handler(request, *args, **kwargs)
+  File "C:\work\FundzaAI\backend\apps\accounts\api.py", line 23, in post
+    "refresh": str(refresh.refresh_token),
+                   ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'RefreshToken' object has no attribute 'refresh_token'
+
+======================================================================
+FAIL: test_workspace_unknown_subject (apps.accounts.tests.AuthAndWorkspaceTests.test_workspace_unknown_subject)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\work\FundzaAI\backend\apps\accounts\tests.py", line 50, in test_workspace_unknown_subject
+    self.assertEqual(response.status_code, 400)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 401 != 400
+
+----------------------------------------------------------------------
+Ran 7 tests in 2.521s
+
+FAILED (failures=1, errors=2)
+Preserving test database for alias 'default'...

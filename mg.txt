@@ -1,0 +1,5 @@
+Operations to perform:
+  Apply all migrations: accounts, admin, auth, contenttypes, progress, quiz, rag, sessions, syllabus, tutoring
+Running migrations:
+  Applying rag.0002_documentchunk_page_number_documentfigure... OK
+  Applying quiz.0004_quizquestion_figures... OK

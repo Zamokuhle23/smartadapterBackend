@@ -1,0 +1,33 @@
+  keep EGCSE Accounting 2027-2029 Syllabus.pdf (already ingested)
+      topics: Purpose of Accounting, Accounting principle and policies, Accounting equation, Source documents and subsidiary books, Double entry, Verification of accounting records, Accounting Procedures, Financial Statements, Specialised accounts, Analysis and Interpretation of financial statements, ACCOUNTING PRINCIPLES AND POLICIES, BUSINESS DOCUMENTS AND SUBSIDIARY BOOKS, PREPARATION OF FINANCIAL STATEMENTS
+  keep EGCSE Agriculture 2027-2029 Syllabus.pdf (already ingested)
+      topics: Macmillan Agriculture for Southern Africa, O Level Agriculture, East African Agriculture, Oxford IGCSE Modern Agriculture, GENERAL AGRICULTURE, ENVIRONMENTAL ISSUES, CROP HUSBANDRY, LIVESTOCK HUSBANDRY, AGRICULTURE ENGINEERING, Presentation of Data
+  keep EGCSE Biology 2027-2029 Syllabus.pdf (already ingested)
+      topics: Characteristics of living organisms, Classification and diversity of living organisms, Cell structure and organisation: the cellular, Levels of organisation, Movement into and out of cells, Excretion in humans, Coordination and response, Variation and Selection, Biotechnology and Genetic modification
+  keep EGCSE Business studies 2027-2029 Syllabus.pdf (already ingested)
+      topics: Understanding Business Activity, Types of Business Organisations in the Private Sector, Principles and Marketing Strategy, Human Resource Management, Operations Management, Finance and Accounting, The External Environment and its Influence on Business
+  keep EGCSE Design and Technology 2021-2023 Syllabus.pdf (already ingested)
+      topics: Analysis of, Research into, Planning for, Testing and
+  keep EGCSE Design and Technology 2027-2029 Syllabus.pdf (already ingested)
+  keep EGCSE Economics 2027-2029 Syllabus.pdf (already ingested)
+      topics: The basic economic problem, The private firm as a producer and employer, Role of Government in an economy, Economic indicators, Developed and Developing economies, International aspects
+  keep EGCSE English language 2027-2029 Syllabus.pdf (already ingested)
+  keep EGCSE Fashion and Fabrics 2027-2029 Syllabus.pdf (already ingested)
+      topics: All About Fabrics by Helen McGrath, A complete guide to sewing by Alison Smith
+  keep EGCSE First Language SiSwati 2027-2029 Syllabus.pdf (already ingested)
+      topics: Sarah Mkhonza Ngibuka Tintsaba TeLubombo, Sabelo Dlomo Simbamgodzi, Vamsile Ginindza Mavimbela Tfutfuka Dvoye, Sabelo Dlomo Livolovolo Lelithulile, Sandile Masondo Sigcoko, Thokozani Dlamini Ayitimbeli, Gcebile Glory Vilakati Litfuba Lesibili, Zamanhlane Masuku, Tengetile Mbingo Malukatana Mbumbulu, Thembekile Nobusika
+  keep EGCSE Food and Nutrition 2027-2029 Syllabus.pdf (already ingested)
+  keep EGCSE Geography 2027-2029 Syllabus.pdf (already ingested)
+      topics: Macmillan Geography for Southern Africa, Oxford Modern Geography, Africa in Focus, The New Wider World (Second Edition), Certificate Map reading for Southern Africa, The Human Planet: Geography for Junior Certificate, Geography in Place (Second Edition), Geography in Place
+  keep EGCSE History 2027-2029 Syllabus.pdf (already ingested)
+  keep EGCSE Literature in English 2027-2029 Syllabus.pdf (already ingested)
+      topics: Into the Wind Study Guide E-learning passports
+  keep EGCSE Mathematics 2027-2029 Syllabus.pdf (already ingested)
+  keep EGCSE Physical Science 2027-2029 Syllabus.pdf (already ingested)
+      topics: Semi-conductors and LED monitors
+  keep EGCSE Religious Education 2027-2029 Syllabus.pdf (already ingested)
+      topics: The birth narrative and childhood of Jesus, Preparation for the ministry of Jesus, Conflict and opposition to Jesus, The Passion narratives, Forty days after resurrection, The spread of the church in Judea, The Damascus experience, Gentiles receive the Gospel, The Council of Jerusalem, The trials and persecution of Paul, Conflict and opposition to Jesus: Later conflicts
+  keep EGCSE Siswati as a Second Language 2027-2029 Syllabus.pdf (already ingested)
+  keep IGCSE Information and Communication Technology 2026-2028 Syllabus.pdf (already ingested)
+      topics: Types and components of computer systems, Input and output devices, Storage devices and media, Networks and the effects of using them, The effects of using IT, ICT applications, The systems life cycle, Safety and security, File management, Graphs and charts, Document production, Website authoring
+Done. 0 syllabi ingested, 0 failed, 94 topics seeded.

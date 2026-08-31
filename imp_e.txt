@@ -1,0 +1,5 @@
+Found 287 PDFs under C:\work\FundzaAI\Resource\EGCSE_Papers
+  OK  ACCOUNTING 1 -> 6896: 56 chunks
+  OK  ACCOUNTING 2 -> 6896: 61 chunks
+  SKIP ADD MATHS.pdf: not a question paper / mark scheme (notes)
+Done. 13 ingested, 1 skipped, 0 failed (source=egcse).

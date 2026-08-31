@@ -1,0 +1,45 @@
+Loaded 529 existing EGCSE docs.
+
+Done. INGESTED 83, copied 83, dup-fingerprint 366, dup-content 4, skipped 0.
+New by type: notes=21, past_paper=49, mark_scheme=8, syllabus=5
+Kept out (dup/empty):
+   [fingerprint] EGCSE Accounting 2020 Exminer Report.pdf
+   [fingerprint] EGCSE Accounting 2020 Question Paper 1.pdf
+   [fingerprint] EGCSE Accounting 2020 Question Paper 2.pdf
+   [fingerprint] EGCSE Accounting 2021 Exminer Report.pdf
+   [fingerprint] EGCSE Accounting 2021-2023 Syllabus.pdf
+   [fingerprint] EGCSE Accounting 2022 Exminer Report.pdf
+   [fingerprint] EGCSE Accounting 2022 Question Paper 1.pdf
+   [fingerprint] EGCSE Accounting 2022 Question Paper 2.pdf
+   [fingerprint] EGCSE Accounting 2023 Examiner Report.pdf
+   [fingerprint] EGCSE Accounting 2023 Question Paper 1.pdf
+   [fingerprint] EGCSE Accounting 2023 Question Paper 2.pdf
+   [fingerprint] EGCSE Accounting 2024 Examiner Report.pdf
+   [fingerprint] EGCSE Accounting 2024 Question Paper 1.pdf
+   [fingerprint] EGCSE Accounting 2024 Question Paper 2.pdf
+   [fingerprint] EGCSE Accounting 2024-2026 Syllabus.pdf
+   [fingerprint] EGCSE Accounting 2025 Examiner Report.pdf
+   [fingerprint] EGCSE Accounting 2025 Question Paper 1.pdf
+   [fingerprint] EGCSE Accounting 2025 Question Paper 2.pdf
+   [fingerprint] EGCSE Accounting 2027-2029 Syllabus.pdf
+   [fingerprint] EGCSE Accounting Specimen 2027 - 2029 Mark Scheme Paper 1.pdf
+   [fingerprint] EGCSE Accounting Specimen 2027 - 2029 Mark Scheme Paper 2.pdf
+   [fingerprint] EGCSE Accounting Specimen 2027 - 2029 Question Paper 1.pdf
+   [fingerprint] EGCSE Accounting Specimen 2027 - 2029 Question Paper 2.pdf
+   [fingerprint] EGCSE Agriculture 2020 Exminer Report.pdf
+   [fingerprint] EGCSE Agriculture 2020 Question Paper 1.pdf
+   [fingerprint] EGCSE Agriculture 2020 Question Paper 2.pdf
+   [fingerprint] EGCSE Agriculture 2021 Exminer Report.pdf
+   [fingerprint] EGCSE Agriculture 2021-2023 Syllabus.pdf
+   [fingerprint] EGCSE Agriculture 2022 Exminer Report.pdf
+   [fingerprint] EGCSE Agriculture 2022 Question Paper 1.pdf
+   [fingerprint] EGCSE Agriculture 2022 Question Paper 2.pdf
+   [fingerprint] EGCSE Agriculture 2023 Examiner Report.pdf
+   [fingerprint] EGCSE Agriculture 2023 Question Paper 1.pdf
+   [fingerprint] EGCSE Agriculture 2023 Question Paper 2.pdf
+   [fingerprint] EGCSE Agriculture 2024 Examiner Report.pdf
+   [fingerprint] EGCSE Agriculture 2024 Question Paper 1.pdf
+   [fingerprint] EGCSE Agriculture 2024 Question Paper 2.pdf
+   [fingerprint] EGCSE Agriculture 2024-2026 Syllabus.pdf
+   [fingerprint] EGCSE Agriculture 2025 Examiner Report.pdf
+   [fingerprint] EGCSE Agriculture 2025 Question Paper 1.pdf

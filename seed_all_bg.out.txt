@@ -1,0 +1,18 @@
+OK 0417 Information and Communication Technology: tiered=True strands=47
+OK 6870 First Language SiSwati: tiered=False strands=12
+OK 6871 SiSwati as a Second Language: tiered=False strands=13
+OK 6873 English Language: tiered=True strands=13
+OK 6875 Literature in English: tiered=True strands=10
+OK 6882 Agriculture: tiered=False strands=26
+OK 6884 Biology: tiered=True strands=43
+OK 6888 Physical Science: tiered=False strands=19
+OK 6890 Geography: tiered=False strands=30
+OK 6891 History: tiered=True strands=25
+OK 6893 Religious Education: tiered=False strands=12
+OK 6896 Accounting: tiered=False strands=29
+OK 6897 Business Studies: tiered=False strands=23
+OK 6899 Economics: tiered=True strands=20
+OK 6902 Design and Technology: tiered=True strands=29
+OK 6904 Fashion and Fabrics: tiered=False strands=28
+OK 6905 Food and Nutrition: tiered=False strands=41
+Done. 17 ok, 0 failed.

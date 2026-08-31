@@ -1,0 +1,5 @@
+OK 6882 Agriculture: tiered=True topics=6
+FAIL 6890: Model returned invalid JSON: Expecting ',' delimiter: line 1 column 3406 (char 3405)
+OK 6896 Accounting: tiered=False topics=3
+OK 6899 Economics: tiered=True topics=2
+Done. 3 ok, 1 failed.

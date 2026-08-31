@@ -1,0 +1,27 @@
+Using existing test database for alias 'default'...
+Found 4 test(s).
+System check identified no issues (0 silenced).
+.F.F
+======================================================================
+FAIL: test_generation_without_llm_returns_503 (apps.quiz.tests.QuizFlowTests.test_generation_without_llm_returns_503)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\work\FundzaAI\backend\apps\quiz\tests.py", line 67, in test_generation_without_llm_returns_503
+    self.assertEqual(response.status_code, 503)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 200 != 503
+
+======================================================================
+FAIL: test_next_then_answer_updates_mastery (apps.quiz.tests.QuizFlowTests.test_next_then_answer_updates_mastery)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\work\FundzaAI\backend\apps\quiz\tests.py", line 87, in test_next_then_answer_updates_mastery
+    self.assertEqual(body["mastery"], 0.2)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: None != 0.2
+
+----------------------------------------------------------------------
+Ran 4 tests in 25.961s
+
+FAILED (failures=2)
+Preserving test database for alias 'default'...
