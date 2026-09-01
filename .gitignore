@@ -10,7 +10,8 @@ venv/
 db.sqlite3
 *.sqlite3
 *.db
-
+media/
+staticfiles/
 
 # Env & secrets
 .env
