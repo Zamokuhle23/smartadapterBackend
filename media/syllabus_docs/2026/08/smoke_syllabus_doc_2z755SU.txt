@@ -1,0 +1,28 @@
+EGCSE MATHEMATICS (6880) - SAMPLE STUDY NOTES
+
+TOPIC 1: ALGEBRA
+
+Simplifying algebraic fractions. An algebraic fraction is a quotient of two
+algebraic expressions, for example 6x over 9. To simplify an algebraic fraction,
+factorise the numerator and the denominator completely, then cancel common
+factors. For example, 6x/9 simplifies to 2x/3 because 3 is a common factor of
+both 6x and 9. When the numerator and denominator are polynomials, factorise
+each first: (x^2 - 9)/(x + 3) becomes ((x-3)(x+3))/(x+3) = x - 3.
+
+Operations with algebraic fractions follow the same rules as numeric fractions:
+to add, rewrite with a common denominator; to multiply, cancel before expanding;
+to divide, multiply by the reciprocal of the second fraction.
+
+Factorising quadratic trinomials. A quadratic trinomial has the form ax^2 + bx + c.
+To factorise x^2 + bx + c, find two numbers that multiply to c and add to b.
+For example, x^2 + 5x + 6 = (x + 2)(x + 6)? No: check that 2 and 3 multiply to 6
+and add to 5, so x^2 + 5x + 6 = (x + 2)(x + 3). When a =/= 1, use splitting the
+middle term or the AC method.
+
+TOPIC 2: EQUATIONS AND INEQUALITIES
+
+Linear equations: collect like terms, isolate the variable using inverse
+operations, and always verify by substituting your solution back into the
+original equation. Quadratic equations may be solved by factorising, completing
+the square, or the quadratic formula x = (-b +/- sqrt(b^2 - 4ac)) / (2a).
+The discriminant b^2 - 4ac tells you the nature of the roots.
