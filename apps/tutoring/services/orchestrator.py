@@ -173,7 +173,7 @@ def _history_messages(session, user_text: str, recent: int = 4, relevant: int = 
 def generate_reply(session, user_text: str) -> tuple[str, dict]:
     """Full turn: persist user message, produce grounded tutor reply."""
     messages, chunk_ids = build_messages(session, user_text)
-    provider = get_chat_provider()
+    provider = get_chat_provider("")  # cheap chat model (tutor conversation)
     reply_text = provider.chat(messages)
     meta = {
         "retrieved_chunk_ids": chunk_ids,
@@ -241,7 +241,7 @@ def answer_stream(session, user_text: str):
 
     use_rag = _needs_rag(user_text)
     messages = _voice_messages(session, user_text, use_rag)
-    provider = get_chat_provider()
+    provider = get_chat_provider("")  # cheap chat model (tutor conversation)
     stream = getattr(provider, "stream", None)
 
     if stream is None:

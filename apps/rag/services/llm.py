@@ -20,14 +20,20 @@ class BaseChatProvider:
 
 
 class OpenAIChatProvider(BaseChatProvider):
+    def __init__(self, model: str | None = None, api_key: str | None = None,
+                 base_url: str | None = None):
+        self.model = model or settings.LLM_MODEL
+        self.api_key = api_key or settings.LLM_API_KEY
+        self.base_url = (base_url or settings.LLM_BASE_URL).rstrip("/")
+
     def chat(self, messages: list[dict], model: str | None = None,
              max_tokens: int | None = None) -> str:
-        payload = {"model": model or settings.LLM_MODEL, "messages": messages}
+        payload = {"model": model or self.model, "messages": messages}
         if max_tokens:
             payload["max_tokens"] = max_tokens
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.LLM_API_KEY}",
+            "Authorization": f"Bearer {self.api_key}",
         }
         # OpenRouter-recommended attribution headers (harmless elsewhere)
         if settings.LLM_APP_URL:
@@ -35,7 +41,7 @@ class OpenAIChatProvider(BaseChatProvider):
         if settings.LLM_APP_TITLE:
             headers["X-Title"] = settings.LLM_APP_TITLE
         req = http_request.Request(
-            f"{settings.LLM_BASE_URL.rstrip('/')}/chat/completions",
+            f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
@@ -52,20 +58,20 @@ class OpenAIChatProvider(BaseChatProvider):
         not support streaming.
         """
         payload = {
-            "model": model or settings.LLM_MODEL,
+            "model": model or self.model,
             "messages": messages,
             "stream": True,
         }
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.LLM_API_KEY}",
+            "Authorization": f"Bearer {self.api_key}",
         }
         if settings.LLM_APP_URL:
             headers["HTTP-Referer"] = settings.LLM_APP_URL
         if settings.LLM_APP_TITLE:
             headers["X-Title"] = settings.LLM_APP_TITLE
         req = http_request.Request(
-            f"{settings.LLM_BASE_URL.rstrip('/')}/chat/completions",
+            f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
@@ -106,18 +112,27 @@ class AzureOpenAIChatProvider(BaseChatProvider):
         AZURE_OPENAI_API_KEY=...
         LLM_BASE_URL=https://<resource>.openai.azure.com
         LLM_MODEL=<deployment-name>            # e.g. gpt-4o-mini (deployment name)
+    And while Azure OpenAI only hosts OpenAI models, the serverless "Models as a
+    Service" path in AI Foundry can expose open models (Phi, Llama) through the
+    same api-key + deployment style - so this provider works for both by pointing
+    LLM_MODEL at the deployment name.
     """
 
+    def __init__(self, model: str | None = None, api_key: str | None = None,
+                 base_url: str | None = None):
+        self.model = model or settings.LLM_MODEL
+        self.api_key = api_key or settings.LLM_API_KEY
+        self.base_url = (base_url or settings.LLM_BASE_URL).rstrip("/")
+
     def _chat_url(self) -> str:
-        base = settings.LLM_BASE_URL.rstrip("/")
         version = getattr(settings, "AZURE_OPENAI_API_VERSION", "2024-06-01")
-        return (f"{base}/openai/deployments/{settings.LLM_MODEL}/chat/completions"
+        return (f"{self.base_url}/openai/deployments/{self.model}/chat/completions"
                 f"?api-version={version}")
 
     def _headers(self) -> dict:
         return {
             "Content-Type": "application/json",
-            "api-key": settings.LLM_API_KEY,
+            "api-key": self.api_key,
         }
 
     def _request(self, url: str, payload: dict) -> http_request.Request:
@@ -142,6 +157,77 @@ class AzureOpenAIChatProvider(BaseChatProvider):
         """Stream completion deltas (SSE). Falls back to one-shot on failure."""
         del model
         payload: dict = {"messages": messages, "stream": True}
+        try:
+            req = self._request(self._chat_url(), payload)
+            with http_request.urlopen(req, timeout=180) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line:
+                        continue
+                    buffer = line[5:].strip() if line.startswith("data:") else line.strip()
+                    if buffer == "[DONE]":
+                        return
+                    if not buffer.startswith("{"):
+                        continue
+                    try:
+                        delta = json.loads(buffer)["choices"][0].get("delta", {}).get("content", "")
+                    except (KeyError, IndexError, json.JSONDecodeError):
+                        continue
+                    if delta:
+                        yield delta
+        except Exception:  # noqa: BLE001 - fall back to one-shot on any streaming failure
+            yield self.chat(messages)
+
+
+class AzureAIFoundryChatProvider(BaseChatProvider):
+    """
+    Azure AI Foundry serverless / Models-as-a-Service chat provider.
+
+    Unlike Azure OpenAI, the model name goes in the REQUEST BODY and the URL is
+    the Azure AI Model Inference API:
+        POST {LLM_BASE_URL}/models/chat/completions?api-version=...
+        { "model": "<deployment-name>", "messages": [...] }
+    Auth is the `api-key` header. This is what a Phi/Llama serverless deployment
+    (endpoint like https://.../api/projects/<proj>) exposes.
+    """
+
+    def __init__(self, model: str | None = None, api_key: str | None = None,
+                 base_url: str | None = None, api_version: str | None = None):
+        self.model = model or settings.LLM_MODEL
+        self.api_key = api_key or settings.LLM_API_KEY
+        self.base_url = (base_url or settings.LLM_BASE_URL).rstrip("/")
+        self.api_version = api_version or getattr(settings, "AZURE_OPENAI_API_VERSION", "2024-06-01")
+
+    def _chat_url(self) -> str:
+        return f"{self.base_url}/models/chat/completions?api-version={self.api_version}"
+
+    def _headers(self) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "api-key": self.api_key,
+        }
+
+    def _request(self, url: str, payload: dict) -> http_request.Request:
+        return http_request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+
+    def chat(self, messages: list[dict], model: str | None = None,
+             max_tokens: int | None = None) -> str:
+        payload: dict = {"model": model or self.model, "messages": messages}
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        with http_request.urlopen(self._request(self._chat_url(), payload), timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        # AI Foundry serverless returns the same OpenAI-shaped choices envelope.
+        return data["choices"][0]["message"]["content"]
+
+    def stream(self, messages: list[dict], model: str | None = None):
+        """Stream completion deltas (SSE). Falls back to one-shot on failure."""
+        payload: dict = {"model": model or self.model, "messages": messages, "stream": True}
         try:
             req = self._request(self._chat_url(), payload)
             with http_request.urlopen(req, timeout=180) as resp:
@@ -191,9 +277,37 @@ class OfflineTutorProvider(BaseChatProvider):
         )
 
 
-def get_chat_provider() -> BaseChatProvider:
-    if not settings.LLM_API_KEY:
+def get_chat_provider(provider: str | None = None, model: str | None = None,
+                      api_key: str | None = None, base_url: str | None = None) -> BaseChatProvider:
+    """
+    Build a chat provider.
+
+    Defaults to the primary LLM_* settings (used for question generation/grading).
+    Pass `provider=""` to get the "cheap chat" config (CHAT_LLM_* settings) used by
+    the tutor chat/voice. `provider` is 'openai' or 'azure'.
+    """
+    if provider is None:
+        # Primary provider (generation/grading).
+        prov = settings.LLM_PROVIDER
+        key = settings.LLM_API_KEY
+        model = model or settings.LLM_MODEL
+        base = base_url or settings.LLM_BASE_URL
+    elif provider == "":
+        # Cheap chat provider.
+        prov = settings.CHAT_LLM_PROVIDER
+        key = getattr(settings, "CHAT_LLM_API_KEY", "") or settings.LLM_API_KEY
+        model = (model or getattr(settings, "CHAT_LLM_MODEL", "")) or settings.LLM_MODEL
+        base = base_url or settings.LLM_BASE_URL
+    else:
+        prov = provider
+        key = api_key or settings.LLM_API_KEY
+        model = model or settings.LLM_MODEL
+        base = base_url or settings.LLM_BASE_URL
+
+    if not key:
         return OfflineTutorProvider()
-    if settings.LLM_PROVIDER == "azure":
-        return AzureOpenAIChatProvider()
-    return OpenAIChatProvider()
+    if prov == "azure_ai":
+        return AzureAIFoundryChatProvider(model=model, api_key=key, base_url=base)
+    if prov == "azure":
+        return AzureOpenAIChatProvider(model=model, api_key=key, base_url=base)
+    return OpenAIChatProvider(model=model, api_key=key, base_url=base)
