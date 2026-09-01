@@ -27,7 +27,7 @@ services:
 
   web:
     build: .
-    command: python manage.py runserver 0.0.0.0:8000
+    command: daphne -b 0.0.0.0 -p 8000 config.asgi:application
     environment:
       DATABASE_URL: postgres://fundza:fundza@db:5432/fundzaai
       REDIS_URL: redis://redis:6379/0

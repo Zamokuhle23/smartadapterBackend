@@ -44,6 +44,56 @@ class OpenAIChatProvider(BaseChatProvider):
             data = json.loads(resp.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
 
+    def stream(self, messages: list[dict], model: str | None = None):
+        """Stream assistant turns token-by-token (SSE) as a generator of str deltas.
+
+        Enables the "talk while thinking" voice experience instead of waiting for a
+        complete answer. Falls back to a single `chat()` chunk if the endpoint does
+        not support streaming.
+        """
+        payload = {
+            "model": model or settings.LLM_MODEL,
+            "messages": messages,
+            "stream": True,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.LLM_API_KEY}",
+        }
+        if settings.LLM_APP_URL:
+            headers["HTTP-Referer"] = settings.LLM_APP_URL
+        if settings.LLM_APP_TITLE:
+            headers["X-Title"] = settings.LLM_APP_TITLE
+        req = http_request.Request(
+            f"{settings.LLM_BASE_URL.rstrip('/')}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with http_request.urlopen(req, timeout=180) as resp:
+                buffer = ""
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        buffer = line[len("data:"):].strip()
+                    else:
+                        buffer = line
+                    if buffer == "[DONE]":
+                        return
+                    if not buffer.startswith("{"):
+                        continue
+                    try:
+                        delta = json.loads(buffer)["choices"][0].get("delta", {}).get("content", "")
+                    except (KeyError, IndexError, json.JSONDecodeError):
+                        continue
+                    if delta:
+                        yield delta
+        except Exception:  # noqa: BLE001 - fall back to one-shot on any streaming failure
+            yield self.chat(messages, model=model)
+
 
 class OfflineTutorProvider(BaseChatProvider):
     """

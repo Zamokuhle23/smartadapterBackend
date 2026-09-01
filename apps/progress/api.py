@@ -3,13 +3,20 @@ from rest_framework import permissions, serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.syllabus.models import LearningObjective, Subject
+from apps.syllabus.models import Enrollment, LearningObjective, Subject
 from apps.tutoring.models import ChatSession
 
 from .models import MasteryEvent, MasteryRecord
 from .services.bkt import update_mastery
 from .services.dashboard import study_recommendations, subject_summary, weakest_objectives
 
+
+def _objective_subject(objective) -> Subject | None:
+    """The subject this objective ultimately belongs to (walks its topic tree)."""
+    topic = objective.topic
+    while topic is not None and topic.parent_id is not None:
+        topic = topic.parent
+    return getattr(topic, "subject", None)
 
 
 class AttemptSerializer(serializers.Serializer):
@@ -30,9 +37,21 @@ class RecordAttemptView(APIView):
         data = serializer.validated_data
 
         try:
-            objective = LearningObjective.objects.get(pk=data["objective_id"])
+            objective = LearningObjective.objects.select_related("topic").get(
+                pk=data["objective_id"]
+            )
         except LearningObjective.DoesNotExist:
             return Response({"detail": "Unknown objective_id"}, status=400)
+
+        # Attempts are only meaningful for a subject the student is enrolled in.
+        subject = _objective_subject(objective)
+        if subject is None or (
+            Enrollment.objects.filter(student=request.user, subject=subject).first() is None
+        ):
+            return Response(
+                {"detail": "Objective belongs to a subject you are not enrolled in"},
+                status=403,
+            )
 
         MasteryEvent.objects.create(
             student=request.user,
@@ -45,7 +64,7 @@ class RecordAttemptView(APIView):
         record, _created = MasteryRecord.objects.get_or_create(
             student=request.user,
             objective=objective,
-            defaults={"mastery": update_mastery(None, data["correct"])},
+            defaults={"mastery": update_mastery(None, data["correct"]), "subject": subject},
         )
         record.attempts += 1
         if data["correct"]:

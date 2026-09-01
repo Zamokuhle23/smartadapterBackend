@@ -13,14 +13,36 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-insecure-key-change-me")
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
+
+# Never leave a known key or open hosts in production.
+if DEBUG:
+    SECRET_KEY = SECRET_KEY or "dev-insecure-key-change-me"
+else:
+    if not SECRET_KEY:
+        raise ImproperlyConfigured("DJANGO_SECRET_KEY must be set when DJANGO_DEBUG != 1")
+    if not os.getenv("DJANGO_ALLOWED_HOSTS"):
+        raise ImproperlyConfigured("DJANGO_ALLOWED_HOSTS must be set when DJANGO_DEBUG != 1")
+
 ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",")]
+if not DEBUG and "*" in ALLOWED_HOSTS:
+    ALLOWED_HOSTS = []  # no wildcard hosts in production; set the real domain
+
+# Secure cookie / HTTPS guardrails - opt in via DJANGO_FORCE_HTTPS=1 (TLS terminated at the edge).
+if os.getenv("DJANGO_FORCE_HTTPS", "0") == "1":
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_SSL_REDIRECT = True
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -132,6 +154,19 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
+    # Global throttling baseline - tailored per-view via ScopedRateThrottle below.
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "100/hour",
+        "user": "1000/hour",
+        # "auth": login/register attempts (brute-force guard)
+        "auth": "20/hour",
+        # "llm": expensive LLM-backed endpoints (quiz gen / grading / exam)
+        "llm": "60/hour",
+    },
 }
 
 SIMPLE_JWT = {

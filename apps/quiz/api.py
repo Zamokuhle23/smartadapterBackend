@@ -1,10 +1,11 @@
 from rest_framework import permissions, serializers
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.progress.models import MasteryEvent, MasteryRecord
 from apps.progress.services.bkt import update_mastery
-from apps.syllabus.models import LearningObjective, Subject
+from apps.syllabus.models import Enrollment, LearningObjective, Subject
 
 from .models import ExamSession, QuizAttempt, QuizQuestion
 from .services.generator import (
@@ -15,6 +16,17 @@ from .services.generator import (
     start_exam_session,
 )
 from .services.selector import next_question_for
+
+
+def _parse_id_list(values) -> list[int] | None:
+    """Parse integer query params that arrive either comma-separated or repeated."""
+    ids: list[int] = []
+    for raw in values:
+        for part in str(raw).split(","):
+            part = part.strip()
+            if part.isdigit():
+                ids.append(int(part))
+    return ids or None
 
 
 class QuestionPublicSerializer(serializers.ModelSerializer):
@@ -56,19 +68,39 @@ class GenerateQuizView(APIView):
     """POST {subject_id, count?, difficulty?, objective_id?} -> new MCQs."""
 
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "llm"
 
     def post(self, request):
         subject_id = request.data.get("subject_id")
         try:
-            subject = Subject.objects.get(pk=subject_id)
+            subject = Subject.objects.select_related("syllabus").get(pk=subject_id)
         except Subject.DoesNotExist:
             return Response({"detail": "Unknown subject_id"}, status=400)
+
+        if Enrollment.objects.filter(student=request.user, subject=subject).first() is None:
+            return Response(
+                {"detail": "Enroll in this subject before generating questions"},
+                status=403,
+            )
 
         objective = None
         if request.data.get("objective_id"):
             objective = LearningObjective.objects.filter(
                 pk=request.data["objective_id"]
             ).first()
+
+        # Optional topic restriction: [1,5,9] -> only generate for these topics.
+        topics = request.data.get("topics") or []
+        if isinstance(topics, (int, str)):
+            topics = [topics]
+        topic_ids = [int(t) for t in topics if str(t).isdigit()] or None
+
+        # Optional objective restriction (finest): pick exactly these learning objectives.
+        objectives = request.data.get("objectives") or request.data.get("objective_ids") or []
+        if isinstance(objectives, (int, str)):
+            objectives = [objectives]
+        objective_ids = [int(o) for o in objectives if str(o).isdigit()] or None
 
         from apps.syllabus.services.subject_map import tier_for
 
@@ -80,6 +112,8 @@ class GenerateQuizView(APIView):
                 difficulty=request.data.get("difficulty"),
                 objective=objective,
                 tier=tier,
+                topic_ids=topic_ids,
+                objective_ids=objective_ids,
             )
         except QuizGenerationError as exc:
             return Response({"detail": str(exc)}, status=503)
@@ -99,7 +133,21 @@ class NextQuestionView(APIView):
             subject = Subject.objects.get(pk=request.query_params.get("subject_id"))
         except Subject.DoesNotExist:
             return Response({"detail": "Unknown subject_id"}, status=400)
-        question = next_question_for(request.user, subject)
+        if Enrollment.objects.filter(student=request.user, subject=subject).first() is None:
+            return Response(
+                {"detail": "Enroll in this subject before practising"},
+                status=403,
+            )
+        # Optional topic restriction: ?topics=1,5,9 OR ?topics=1&topics=5&topics=9.
+        # Retrofit (Android) sends a List<Int> @Query as repeated params, so use
+        # getlist() and split each value on commas to cover both encodings.
+        topic_ids = _parse_id_list(request.query_params.getlist("topics"))
+        objective_ids = _parse_id_list(request.query_params.getlist("objectives"))
+        question = next_question_for(
+            request.user, subject,
+            topic_ids=topic_ids if not objective_ids else None,
+            objective_ids=objective_ids,
+        )
         if question is None:
             return Response({"detail": "no_questions"}, status=404)
         return Response(QuestionPublicSerializer(question, context={"request": self.request}).data)
@@ -109,14 +157,30 @@ class AnswerQuizView(APIView):
     """POST {question_id, selected_index? | answer_text?, latency_ms?} -> grade + BKT update."""
 
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "llm"
 
     def post(self, request):
         try:
-            question = QuizQuestion.objects.select_related("objective").get(
+            question = QuizQuestion.objects.select_related("objective", "subject").get(
                 pk=request.data.get("question_id")
             )
         except QuizQuestion.DoesNotExist:
             return Response({"detail": "Unknown question_id"}, status=400)
+
+        # Only enrolled students may answer a subject's questions, and only
+        # within their curriculum tier (mirrors the generator's filtering).
+        enrollment = Enrollment.objects.filter(
+            student=request.user, subject=question.subject
+        ).first()
+        if enrollment is None:
+            return Response({"detail": "Not enrolled in this question's subject"}, status=403)
+        if question.subject.tiers_available and enrollment.tier:
+            obj_tier = question.objective.tier if question.objective else ""
+            if obj_tier and obj_tier != enrollment.tier:
+                return Response(
+                    {"detail": "Question belongs to a different curriculum tier"}, status=403
+                )
 
         latency_ms = request.data.get("latency_ms")
         correct = False
@@ -141,7 +205,10 @@ class AnswerQuizView(APIView):
                 selected = int(request.data.get("selected_index"))
             except (TypeError, ValueError):
                 return Response({"detail": "selected_index required"}, status=400)
-            selected = max(0, selected)
+            # Bounds-check against the real option list - a junk index is invalid,
+            # not merely wrong.
+            if not (0 <= selected < len(question.options)):
+                return Response({"detail": "selected_index out of range"}, status=400)
             correct = selected == question.correct_index
 
         QuizAttempt.objects.create(
@@ -164,7 +231,9 @@ class AnswerQuizView(APIView):
                 latency_ms=latency_ms,
             )
             record, _created = MasteryRecord.objects.get_or_create(
-                student=request.user, objective=question.objective
+                student=request.user,
+                objective=question.objective,
+                defaults={"subject": question.subject},
             )
             record.attempts += 1
             if correct:
@@ -231,6 +300,11 @@ class StartExamView(APIView):
             subject = Subject.objects.select_related("syllabus").get(pk=subject_id)
         except Subject.DoesNotExist:
             return Response({"detail": "Unknown subject_id"}, status=400)
+        if Enrollment.objects.filter(student=request.user, subject=subject).first() is None:
+            return Response(
+                {"detail": "Enroll in this subject before sitting an exam"},
+                status=403,
+            )
 
         try:
             paper = int(request.data.get("paper", 1))
@@ -261,6 +335,8 @@ class ExamNextView(APIView):
     """POST /api/quiz/exam/<id>/next/ -> generate + return the next exam question."""
 
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "llm"
 
     def post(self, request, pk):
         session = ExamSession.objects.filter(pk=pk, student=request.user).first()

@@ -8,6 +8,7 @@ Embedding providers.
 """
 
 import hashlib
+import json
 import math
 import re
 from urllib import request as http_request
@@ -58,7 +59,7 @@ class OpenAIEmbedder(BaseEmbedder):
     def _post(self, payload: dict) -> dict:
         req = http_request.Request(
             f"{settings.EMBEDDINGS_BASE_URL.rstrip('/')}/embeddings",
-            data=__import__("json").dumps(payload).encode("utf-8"),
+            data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {settings.EMBEDDINGS_API_KEY}",
@@ -66,8 +67,6 @@ class OpenAIEmbedder(BaseEmbedder):
             method="POST",
         )
         with http_request.urlopen(req, timeout=60) as resp:
-            import json
-
             return json.loads(resp.read().decode("utf-8"))
 
     def embed_texts(self, texts):

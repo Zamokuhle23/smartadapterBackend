@@ -1,7 +1,7 @@
 from django.db import models
 
 from apps.accounts.models import User
-from apps.syllabus.models import LearningObjective
+from apps.syllabus.models import LearningObjective, Subject
 
 
 class MasteryEvent(models.Model):
@@ -28,13 +28,19 @@ class MasteryRecord(models.Model):
     objective = models.ForeignKey(
         LearningObjective, on_delete=models.CASCADE, related_name="mastery_records"
     )
+    # Denormalised from objective.topic tree so analytics filter/group in SQL
+    # without walking the topic hierarchy per record (avoids N+1 on hot paths).
+    subject = models.ForeignKey(
+        Subject, null=True, blank=True, on_delete=models.CASCADE, related_name="mastery_records"
+    )
     mastery = models.FloatField(default=0.30)  # BKT P_INIT
     attempts = models.PositiveIntegerField(default=0)
     correct_count = models.PositiveIntegerField(default=0)
     last_reviewed_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ("student", "objective")
+        unique_together = (("student", "objective"),)
+        indexes = [models.Index(fields=["student", "subject", "mastery"])]
 
     def __str__(self):
         return f"Mastery<{self.student.username} obj={self.objective_id} {self.mastery:.2f}>"

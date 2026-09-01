@@ -1,5 +1,6 @@
 from rest_framework import permissions
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -11,6 +12,8 @@ class RegisterView(APIView):
     """POST {username, email?, password, level?, form_level?} -> JWT pair."""
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)

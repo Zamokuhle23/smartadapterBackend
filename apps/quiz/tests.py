@@ -8,7 +8,7 @@ from apps.progress.models import MasteryRecord
 from apps.quiz.models import QuizAttempt, QuizQuestion
 from apps.quiz.services.generator import QuizGenerationError
 from apps.syllabus.management.commands.seed_syllabi import EGCSE_SUBJECTS
-from apps.syllabus.models import LearningObjective, Subject, Syllabus, Topic
+from apps.syllabus.models import Enrollment, LearningObjective, Subject, Syllabus, Topic
 
 FAKE_LLM_JSON = (
     '[{"question": "Simplify 6x/9.", "options": ["2x/3", "3x/2", "6x/3", "x/3"], '
@@ -25,7 +25,11 @@ class FakeProvider:
 def make_maths():
     syllabus = Syllabus.objects.create(level="EGCSE", name="EGCSE Test", version="1.0")
     subject = Subject.objects.create(syllabus=syllabus, code=EGCSE_SUBJECTS[4][0], name="Mathematics")
-    topic = Topic.objects.create(subject=subject, title="Algebra")
+    Topic.objects.create(subject=subject, title="Algebra")
+    # A realistic subject has several strands; the exam blueprint is grounded to the
+    # subject's real topics, so add the topic the mock blueprint expects.
+    Topic.objects.create(subject=subject, title="Geometry")
+    topic = Topic.objects.get(subject=subject, title="Algebra")
     obj = LearningObjective.objects.create(topic=topic, statement="Simplify algebraic fractions")
     return syllabus, subject, obj
 
@@ -35,6 +39,7 @@ class QuizFlowTests(TestCase):
         self.syllabus, self.subjects_entry, self.obj = make_maths()
         self.subject = self.subjects_entry
         self.user = User.objects.create_user("learner", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
@@ -70,7 +75,7 @@ class QuizFlowTests(TestCase):
         payload = self._generate()
 
         # Seed a mastery record so adaptive selection has a signal.
-        MasteryRecord.objects.create(student=self.user, objective=self.obj, mastery=0.2)
+        MasteryRecord.objects.create(student=self.user, objective=self.obj, mastery=0.2, subject=self.subject)
 
         nxt = self.client.get(f"/api/quiz/next/?subject_id={self.subject.id}")
         self.assertEqual(nxt.status_code, 200)
@@ -134,6 +139,7 @@ class ExamFlowTests(TestCase):
         syllabus, subject_obj, self.obj = make_maths()
         self.subject = subject_obj
         self.user = User.objects.create_user("sitter", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
         self.provider = ScriptedProvider()
@@ -215,6 +221,7 @@ class StructuredAnswerTests(TestCase):
             marking_guidance="M1 split, A1 factors, ...",
         )
         self.user = User.objects.create_user("writer", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
@@ -259,8 +266,8 @@ class TopicMatchedWeaknessTests(TestCase):
         obj_nerv = LearningObjective.objects.create(
             topic=self.nervous, statement="Explain reflex arcs"
         )
-        MasteryRecord.objects.create(student=self.user, objective=obj_repro, mastery=0.2)
-        MasteryRecord.objects.create(student=self.user, objective=obj_nerv, mastery=0.9)
+        MasteryRecord.objects.create(student=self.user, objective=obj_repro, mastery=0.2, subject=self.subject)
+        MasteryRecord.objects.create(student=self.user, objective=obj_nerv, mastery=0.9, subject=self.subject)
 
     def test_topic_question_returns_only_that_topics_weakness(self):
         from apps.progress.services.dashboard import weak_objectives_for_message
@@ -308,6 +315,7 @@ class ProvenanceSourceTests(TestCase):
     def setUp(self):
         self.syllabus, self.subject, self.obj = make_maths()
         self.user = User.objects.create_user("provenance", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 

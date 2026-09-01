@@ -24,6 +24,13 @@ from apps.syllabus.api import (
 )
 from apps.tutoring.api import ChatSessionViewSet
 
+
+class _ThrottledTokenView(TokenObtainPairView):
+    """Login endpoint fortified with a global brute-force throttle scope."""
+
+    throttle_scope = "auth"
+
+
 router = DefaultRouter()
 router.register("syllabi", SyllabusViewSet, basename="syllabus")
 router.register("subjects", SubjectViewSet, basename="subject")
@@ -35,7 +42,7 @@ router.register("chat-sessions", ChatSessionViewSet, basename="chat-session")
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/auth/register/", RegisterView.as_view(), name="auth-register"),
-    path("api/auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/auth/token/", _ThrottledTokenView.as_view(), name="token_obtain_pair"),
     path("api/auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/me/profile/", LearnerProfileView.as_view(), name="learner-profile"),
     path("api/progress/attempt/", RecordAttemptView.as_view(), name="record-attempt"),
