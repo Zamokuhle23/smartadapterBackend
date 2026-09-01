@@ -250,6 +250,83 @@ class AzureAIFoundryChatProvider(BaseChatProvider):
             yield self.chat(messages)
 
 
+class AzureOpenAISdkChatProvider(BaseChatProvider):
+    """
+    Azure OpenAI / AI Foundry via the OpenAI-SDK-compatible endpoint.
+
+    Format (what the Azure playground sample provides):
+        endpoint = "https://<host>/openai/v1"
+        client = OpenAI(base_url=endpoint, api_key=...)
+        client.chat.completions.create(model="<deployment>", ...)
+
+    So here:
+        LLM_PROVIDER=azure_sdk
+        AZURE_OPENAI_API_KEY=...
+        LLM_BASE_URL=https://<host>/openai/v1
+        LLM_MODEL=<deployment-name>          # e.g. Phi-4-reasoning, sent in request BODY
+
+    REST: POST {LLM_BASE_URL}/chat/completions
+          body: {model, messages}
+          auth: api-key header
+    """
+
+    def __init__(self, model: str | None = None, api_key: str | None = None,
+                 base_url: str | None = None):
+        self.model = model or settings.LLM_MODEL
+        self.api_key = api_key or settings.LLM_API_KEY
+        self.base_url = (base_url or settings.LLM_BASE_URL).rstrip("/")
+
+    def _chat_url(self) -> str:
+        return f"{self.base_url}/chat/completions"
+
+    def _headers(self) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "api-key": self.api_key,
+        }
+
+    def _request(self, url: str, payload: dict) -> http_request.Request:
+        return http_request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+
+    def chat(self, messages: list[dict], model: str | None = None,
+             max_tokens: int | None = None) -> str:
+        payload: dict = {"model": model or self.model, "messages": messages}
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        with http_request.urlopen(self._request(self._chat_url(), payload), timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data["choices"][0]["message"]["content"]
+
+    def stream(self, messages: list[dict], model: str | None = None):
+        """Stream completion deltas (SSE). Falls back to one-shot on failure."""
+        payload: dict = {"model": model or self.model, "messages": messages, "stream": True}
+        try:
+            req = self._request(self._chat_url(), payload)
+            with http_request.urlopen(req, timeout=180) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line:
+                        continue
+                    buffer = line[5:].strip() if line.startswith("data:") else line.strip()
+                    if buffer == "[DONE]":
+                        return
+                    if not buffer.startswith("{"):
+                        continue
+                    try:
+                        delta = json.loads(buffer)["choices"][0].get("delta", {}).get("content", "")
+                    except (KeyError, IndexError, json.JSONDecodeError):
+                        continue
+                    if delta:
+                        yield delta
+        except Exception:  # noqa: BLE001 - fall back to one-shot on any streaming failure
+            yield self.chat(messages)
+
+
 class OfflineTutorProvider(BaseChatProvider):
     """
     Deterministic study-notes style answer built from the retrieved chunks.
@@ -306,6 +383,8 @@ def get_chat_provider(provider: str | None = None, model: str | None = None,
 
     if not key:
         return OfflineTutorProvider()
+    if prov == "azure_sdk":
+        return AzureOpenAISdkChatProvider(model=model, api_key=key, base_url=base)
     if prov == "azure_ai":
         return AzureAIFoundryChatProvider(model=model, api_key=key, base_url=base)
     if prov == "azure":

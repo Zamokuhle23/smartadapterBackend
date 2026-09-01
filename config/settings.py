@@ -201,7 +201,7 @@ CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_TASK_ALWAYS_EAGER", "0") == "1"
 # Provider: "openai" (OpenAI / OpenRouter / any OpenAI-compatible chat endpoint)
 #           "azure" (Azure OpenAI - uses api-key header + deployment URL)
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
-if LLM_PROVIDER in ("azure", "azure_ai"):
+if LLM_PROVIDER in ("azure", "azure_ai", "azure_sdk"):
     LLM_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
 else:
     LLM_API_KEY = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY", "")
@@ -213,7 +213,7 @@ LLM_MODEL = os.getenv("LLM_MODEL", "stealth/ox-alpha")
 # If CHAT_LLM_PROVIDER is unset it falls back to LLM_PROVIDER (single provider).
 CHAT_LLM_PROVIDER = os.getenv("CHAT_LLM_PROVIDER", "").lower() or LLM_PROVIDER
 CHAT_LLM_MODEL = os.getenv("CHAT_LLM_MODEL", "") or LLM_MODEL
-if CHAT_LLM_PROVIDER in ("azure", "azure_ai"):
+if CHAT_LLM_PROVIDER in ("azure", "azure_ai", "azure_sdk"):
     CHAT_LLM_API_KEY = os.getenv("CHAT_AZURE_OPENAI_API_KEY", "") or os.getenv("AZURE_OPENAI_API_KEY", "")
 else:
     CHAT_LLM_API_KEY = os.getenv("CHAT_OPENAI_API_KEY", "") or LLM_API_KEY
