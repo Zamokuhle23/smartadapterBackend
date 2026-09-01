@@ -196,12 +196,20 @@ CELERY_RESULT_BACKEND = REDIS_URL or None
 CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_TASK_ALWAYS_EAGER", "0") == "1"
 
 # ---------------------------------------------------------------------------
-# RAG / LLM providers (OpenRouter-compatible by default)
+# RAG / LLM providers (OpenRouter-compatible by default; Azure OpenAI supported)
 # ---------------------------------------------------------------------------
-LLM_API_KEY = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+# Provider: "openai" (OpenAI / OpenRouter / any OpenAI-compatible chat endpoint)
+#           "azure" (Azure OpenAI - uses api-key header + deployment URL)
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
+if LLM_PROVIDER == "azure":
+    LLM_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+else:
+    LLM_API_KEY = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "stealth/ox-alpha")
-# Recommended OpenRouter attribution headers
+# Azure OpenAI only - the deployed model name and API version.
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-06-01")
+# Recommended OpenRouter attribution headers (no-op for Azure)
 LLM_APP_URL = os.getenv("LLM_APP_URL", "https://fundza.ai")
 LLM_APP_TITLE = os.getenv("LLM_APP_TITLE", "FundzaAI")
 # Embeddings: "hash" = offline hasher (fallback); "local" = in-process
