@@ -30,6 +30,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.accept()
         self.audio_buffer = []
         self.voice_worker_alive = False
+        # Subtopic the current user turn is routed to (None = main chat).
+        self.current_topic_id = None
 
     async def disconnect(self, code):
         if hasattr(self, "group_name"):
@@ -58,11 +60,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         content = str(payload.get("content", "")).strip()
         if not content:
             return
-        await self._save_message("user", content)
-        await self.send_json({"role": "user", "content": content})
+        topic = await database_sync_to_async(self._route_topic)(content)
+        self.current_topic_id = topic.id if topic else None
+        await self._save_message("user", content, topic=topic)
+        await self.send_json({"role": "user", "content": content, "topic_id": topic.id if topic else None})
         reply, meta = await database_sync_to_async(self._generate)(content)
-        await self._save_message("tutor", reply, meta)
-        await self.send_json({"role": "tutor", "content": reply, "meta": meta})
+        await self._save_message("tutor", reply, meta, topic=topic)
+        await self.send_json({"role": "tutor", "content": reply, "meta": meta,
+                              "topic_id": topic.id if topic else None})
 
     async def _handle_voice(self):
         pcm = b"".join(self.audio_buffer)
@@ -76,15 +81,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
             try:
                 from .services.voice import transcribe
                 from .services.orchestrator import answer_stream
+                from .services.routing import classify_topic
                 text = transcribe(pcm)
             except Exception as exc:
                 out.put(("error", str(exc)))
                 return
             out.put(("transcript", text))
+            try:
+                topic = classify_topic(self.session, text)
+            except Exception:
+                topic = None
+            out.put(("topic", topic.id if topic else None))
             out.put(("save_user", text))
             try:
                 parts = []
-                for ev in answer_stream(self.session, text):
+                for ev in answer_stream(self.session, text, topic):
                     if ev["kind"] == "token":
                         parts.append(ev["text"])
                     out.put(("event", ev))
@@ -102,12 +113,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             kind, data = await asyncio.to_thread(out.get)
             if kind == "done":
                 break
-            if kind == "error":
+            if kind == "topic":
+                self.current_topic_id = data
+            elif kind == "error":
                 await self.send_json({"kind": "error", "text": data})
             elif kind == "save_user":
-                await self._save_message("user", data)
+                await self._save_message("user", data, topic=self._topic_obj())
             elif kind == "save_tutor":
-                await self._save_message("tutor", data)
+                await self._save_message("tutor", data, topic=self._topic_obj())
             elif kind == "transcript":
                 await self.send_json({"kind": "transcript", "text": data})
             elif kind == "event":
@@ -120,7 +133,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     def _generate(self, content: str):
         from .services.orchestrator import generate_reply
-        return generate_reply(self.session, content)
+        return generate_reply(self.session, content, topic=self._topic_obj())
 
     @database_sync_to_async
     def _get_session(self, user):
@@ -131,10 +144,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def _save_message(self, role: str, content: str, meta=None):
+    def _route_topic(self, content: str):
+        from .services.routing import classify_topic
+        return classify_topic(self.session, content)
+
+    def _topic_obj(self):
+        """Resolve the stashed current_topic_id to a Topic (or None) for DB write."""
+        if not self.current_topic_id:
+            return None
+        from apps.syllabus.models import Topic
+        return Topic.objects.filter(pk=self.current_topic_id).first()
+
+    @database_sync_to_async
+    def _save_message(self, role: str, content: str, meta=None, topic=None):
         from .models import Message
 
-        Message.objects.create(session=self.session, role=role, content=content, meta=meta)
+        Message.objects.create(session=self.session, role=role, content=content, meta=meta, topic=topic)
         # Auto-title the session from the first student message.
         default_title = f"{self.session.syllabus.name}" + (
             f" - {self.session.subject.name}" if self.session.subject else ""

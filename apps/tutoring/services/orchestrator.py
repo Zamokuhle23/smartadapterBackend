@@ -93,7 +93,7 @@ def _format_weaknesses(student, subject, user_text: str) -> str:
     return "\n".join(f"- {statement} (mastery {mastery:.0%})" for statement, mastery in rows)
 
 
-def build_messages(session, user_text: str) -> list[dict]:
+def build_messages(session, user_text: str, topic=None) -> list[dict]:
     profile = session.student.profile if hasattr(session.student, "profile") else None
     language = getattr(profile, "preferred_language", "en") or "en"
     style = getattr(profile, "learning_style", "auto") or "auto"
@@ -128,22 +128,25 @@ def build_messages(session, user_text: str) -> list[dict]:
         context=context,
     )
 
-    recent = _history_messages(session, user_text, recent=6, relevant=4)
+    recent = _history_messages(session, user_text, topic=topic, recent=6, relevant=4)
 
     return [{"role": "system", "content": system}, *recent, {"role": "user", "content": user_text}], [c.id for c in chunks]
 
 
-def _history_messages(session, user_text: str, recent: int = 4, relevant: int = 4) -> list[dict]:
+def _history_messages(session, user_text: str, topic=None, recent: int = 4, relevant: int = 4) -> list[dict]:
     """Build a bounded conversational window: the `recent` most-recent messages plus
     the `relevant` most topically-relevant ones (by token overlap with the current
     question), de-duplicated and in chronological order.
 
-    This replaces a flat 'last N' slice so the tutor keeps enough immediate context
-    AND re-surfaces earlier messages that are on-topic for the follow-up.
+    When `topic` is given, history is scoped to THAT subtopic thread (so follow-ups
+    see that thread's prior context - e.g. "the answer was x=3" stays present below a
+    new question). When None (main chat), only main-chat (untagged) messages are used.
     """
-    msgs = list(
-        session.messages.all().order_by("created_at")
-    )
+    if topic is not None:
+        qs = session.messages.filter(topic_id=topic.id)
+    else:
+        qs = session.messages.filter(topic__isnull=True)
+    msgs = list(qs.order_by("created_at"))
     scores = []
     for m in msgs:
         text = (m.content or "").lower()
@@ -180,9 +183,9 @@ def _history_messages(session, user_text: str, recent: int = 4, relevant: int = 
     ]
 
 
-def generate_reply(session, user_text: str) -> tuple[str, dict]:
+def generate_reply(session, user_text: str, topic=None) -> tuple[str, dict]:
     """Full turn: persist user message, produce grounded tutor reply."""
-    messages, chunk_ids = build_messages(session, user_text)
+    messages, chunk_ids = build_messages(session, user_text, topic=topic)
     provider = get_chat_provider("")  # cheap chat model (tutor conversation)
     reply_text = provider.chat(messages)
     meta = {
@@ -203,13 +206,17 @@ def generate_reply(session, user_text: str) -> tuple[str, dict]:
 # Voice reply (streaming): talk while thinking, synthesize as we go.
 # ---------------------------------------------------------------------------
 
-def _voice_messages(session, user_text: str, use_rag: bool) -> list[dict]:
+def _voice_messages(session, user_text: str, use_rag: bool, topic=None) -> list[dict]:
     """Conversation history + a voice persona; retrieval appended only when needed."""
     from .voice import VOICE_SYSTEM_TEMPLATE
 
+    if topic is not None:
+        msgs_qs = session.messages.filter(topic_id=topic.id)
+    else:
+        msgs_qs = session.messages.filter(topic__isnull=True)
     history = [
         {"role": "user" if m.role == "user" else "assistant", "content": m.content}
-        for m in session.messages.all().order_by("-created_at")[:8]
+        for m in msgs_qs.order_by("-created_at")[:8]
     ][::-1]
     system = VOICE_SYSTEM_TEMPLATE
     from apps.tutoring.services.memory import relevant_memory
@@ -251,7 +258,7 @@ def _needs_rag(user_text: str) -> bool:
     return "?" in user_text
 
 
-def answer_stream(session, user_text: str):
+def answer_stream(session, user_text: str, topic=None):
     """Yield {"kind":"token"|"audio"|"done", ...} events for a spoken reply.
 
     - Streams LLM tokens (fast first sound).
@@ -263,7 +270,7 @@ def answer_stream(session, user_text: str):
     from .voice import synthesize_base64
 
     use_rag = _needs_rag(user_text)
-    messages = _voice_messages(session, user_text, use_rag)
+    messages = _voice_messages(session, user_text, use_rag, topic)
     provider = get_chat_provider("")  # cheap chat model (tutor conversation)
     stream = getattr(provider, "stream", None)
 

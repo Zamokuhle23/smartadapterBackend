@@ -1,13 +1,17 @@
 from rest_framework import serializers, viewsets
+from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .models import ChatSession, Message
+from .services.routing import thread_list
 
 
 class MessageSerializer(serializers.ModelSerializer):
+    topic_id = serializers.IntegerField(source="topic_id", read_only=True)
+
     class Meta:
         model = Message
-        fields = ("id", "role", "content", "meta", "created_at")
+        fields = ("id", "role", "content", "topic_id", "meta", "created_at")
 
 
 class ChatSessionSerializer(serializers.ModelSerializer):
@@ -49,5 +53,19 @@ class ChatSessionViewSet(viewsets.ModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         session = self.get_object()
         serializer = self.get_serializer(session)
-        messages = MessageSerializer(session.messages.all(), many=True).data
+        # Optional thread scoping: ?topic=main -> root chat, ?topic=<id> -> one subtopic.
+        topic_id = request.query_params.get("topic")
+        if topic_id == "main":
+            msgs = session.messages.filter(topic__isnull=True)
+        elif topic_id:
+            msgs = session.messages.filter(topic_id=topic_id)
+        else:
+            msgs = session.messages.all()
+        messages = MessageSerializer(msgs, many=True).data
         return Response({**serializer.data, "messages": messages})
+
+    @action(detail=True, methods=["get"])
+    def threads(self, request, pk=None):
+        """Ordered list of main chat + subtopic threads for this session."""
+        session = self.get_object()
+        return Response(thread_list(session))

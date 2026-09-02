@@ -1,7 +1,7 @@
 from django.db import models
 
 from apps.accounts.models import User
-from apps.syllabus.models import Subject, Syllabus
+from apps.syllabus.models import Subject, Syllabus, Topic
 
 
 class ChatSession(models.Model):
@@ -34,6 +34,11 @@ class Message(models.Model):
     session = models.ForeignKey(ChatSession, on_delete=models.CASCADE, related_name="messages")
     role = models.CharField(max_length=8, choices=Role.choices)
     content = models.TextField()
+    # The subtopic this message belongs to. None = root "main chat". Messages are
+    # grouped by this to form auto-created subtopic threads for the subject.
+    topic = models.ForeignKey(
+        Topic, null=True, blank=True, on_delete=models.SET_NULL, related_name="messages"
+    )
     meta = models.JSONField(null=True, blank=True)  # retrieved chunk ids, provider info
     created_at = models.DateTimeField(auto_now_add=True)
 
