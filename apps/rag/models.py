@@ -1,15 +1,16 @@
 from django.db import models
 
 from apps.syllabus.models import Subject, Syllabus, SyllabusDocument, Topic
+from pgvector.django import VectorField
 
 
 class DocumentChunk(models.Model):
     """
     One retrievable passage of a syllabus document, with its embedding.
 
-    Embeddings are stored portably (JSON list of floats) so development works
-    on SQLite too. On PostgreSQL+pgvector this column should be mirrored into
-    a VectorField for KNN search - see apps/rag/services/retriever.py TODO.
+    `embedding` is a portable JSON list of floats so development works on SQLite
+    too. On PostgreSQL a real pgvector `embedding_vec` column is available for
+    fast HNSW KNN search - see apps/rag/services/retriever.py.
     """
 
     syllabus = models.ForeignKey(Syllabus, on_delete=models.CASCADE, related_name="chunks")
@@ -22,6 +23,9 @@ class DocumentChunk(models.Model):
     page_number = models.PositiveSmallIntegerField(null=True, blank=True)  # 1-based PDF page (figures)
     text = models.TextField()
     embedding = models.JSONField(null=True, blank=True)
+    # pgvector column (PostgreSQL only). NULL/unused on SQLite; backfilled on
+    # Postgres by reembed_chunks so HNSW KNN search works.
+    embedding_vec = VectorField(blank=True, null=True)
 
     class Meta:
         indexes = [models.Index(fields=["syllabus", "subject"])]

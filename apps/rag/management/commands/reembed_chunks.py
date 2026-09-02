@@ -36,19 +36,25 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("No chunks found."))
             return
 
+        from django.db import connection
+
+        is_postgres = connection.vendor == "postgresql"
         done = 0
         while done < total:
             batch = list(qs[done : done + BATCH])
             vectors = embedder.embed_texts([c.text for c in batch])
             for chunk, vec in zip(batch, vectors):
                 chunk.embedding = vec
-            DocumentChunk.objects.bulk_update(batch, ["embedding"], batch_size=BATCH)
+                if is_postgres:
+                    chunk.embedding_vec = vec
+            fields = ["embedding"] + (["embedding_vec"] if is_postgres else [])
+            DocumentChunk.objects.bulk_update(batch, fields, batch_size=BATCH)
             done += len(batch)
             self.stdout.write(f"  {done}/{total}")
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Re-embedded {done} chunks. Old-vector cleanup: chunks whose "
-                f"dimension differs are skipped at query time by the retriever."
+                f"Re-embedded {done} chunks."
+                + (" pgvector column updated." if is_postgres else " (SQLite: JSON only).")
             )
         )
