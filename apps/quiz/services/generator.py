@@ -49,19 +49,25 @@ Rules:
 - Match the format of the source paper: multiple choice where the real Paper 1
   uses it; structured/long-form where Papers 2+ use it.
   Set "format" to "mcq" or "structured" accordingly.
-- Diagrams and figures (three cases):
-  * If the item has a DIAGRAM/FIGURE/GRAPH whose labels or values are the SAME
-    for every variant (anatomy to label, a graph to read off, a shape to compare),
-    REUSE the real figure's exact labels and numbers - vary only the wording around
-    it. Set "figure_required": true and reference the visual in the question text
-    with words like "(see diagram)" or "In the diagram...".
-  * If the figure's numbers would need to change with your variant (e.g. a circuit
-    with different resistor values, a triangle with new side lengths), DO NOT rely on
-    the real image. Instead DRAW the changed figure inside the question text using
-    monospace ASCII art (dots, dashes, symbols, letters) - a triangle, number line,
-    both axes, or a simple labelled diagram - so every variant gets its own fresh,
-    internally-consistent figure. Set "figure_required": false for this. Never leave
-    a bare "see diagram" with no description or drawing.
+- Diagrams and figures — ALWAYS use exactly one of these TWO scenarios:
+  SCENARIO 1 (REUSE the real image): When the source item's DIAGRAM/FIGURE/GRAPH
+  has labels or values that stay IDENTICAL for every variant (e.g. anatomy to
+  label, a graph to read off, a shape to compare), REUSE the actual figure.
+  Write the question around WHAT IS IN that image (its labelled parts, given
+  sides a/b/c, etc.), changing only the surrounding wording or an incidental
+  setting (e.g. a river in England -> the same-shaped river in Norway). Set
+  "figure_required": true and refer to it as "(see diagram)" / "In the diagram...".
+  DO NOT draw or change the figure's geometry.
+  SCENARIO 2 (DRAW a fresh ASCII diagram): When the figure's NUMBERS would need to
+  change for a new variant (e.g. a triangle with different side lengths, a circuit
+  with new resistor values, a new number line), DO NOT reuse the image. Instead
+  DRAW a brand-new, internally-consistent monospace ASCII figure inside the
+  question text in a ``` ascii code block: a labelled triangle, axes, number line
+  or simple diagram. Use only ASCII glyphs (A-Z, a-z, 0-9, . | / \\ - _ = + * ())
+  and align the rows so it reads as a shape; put each label letter on its own
+  spot. Set "figure_required": false. This is how each student gets a FRESH,
+  unique diagram so questions never look identical. NEVER leave a bare "see
+  diagram" with no drawing.
   * Never invent a figure, label or value that is not implied by the source chunk.
 - MCQ: exactly 4 options, only ONE clearly correct, distractors based on real
   misconceptions. Structured: no options array (use []), realistic "marks".
@@ -111,11 +117,17 @@ Rules:
 - MCQ: exactly 4 options, one clearly correct, misconception-based distractors.
 - Structured: multi-part where typical for this paper, realistic marks, no options ([]).
 - "marking_guidance": full model answer + mark allocation per part.
-- If the item for this topic uses a DIAGRAM/FIGURE: if its labels/values stay the same
-  for every sitting (anatomy to label, a graph to read off), REUSE them and set
-  "figure_required": true. If the numbers would vary, DRAW the changed figure inside
-  the question text as monospace ASCII art (triangle, axes, number line) and set
-  "figure_required": false. Never a bare "see diagram".
+- Diagrams and figures - use exactly ONE of these two scenarios:
+  SCENARIO 1 (REUSE the real image): if the item's diagram/figure/graph has labels
+  or values that stay IDENTICAL for every sitting (anatomy to label, a graph to
+  read off, a shape to compare), ask the question AROUND WHAT IS IN that image and
+  REUSE it. Set "figure_required": true; refer to it as "(see diagram)". Do NOT
+  redraw or change its geometry.
+  SCENARIO 2 (DRAW a fresh ASCII diagram): if the figure's NUMBERS would vary for a
+  new question, DRAW a brand-new monospace ASCII figure in a ``` ascii code block
+  inside the question text (labelled triangle, axes, number line). Use only ASCII
+  glyphs and align the rows so it reads as a shape. Set "figure_required": false so
+  every student gets a fresh, unique diagram. NEVER a bare "see diagram".
 
 Return ONLY a valid JSON object, no fences:
 {{"question": "...", "format": "mcq", "options": ["...","...","...","..."],
