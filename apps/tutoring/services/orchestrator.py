@@ -34,6 +34,10 @@ LEARNER PROFILE (personalization):
 KNOWN WEAKNESSES (only those matching this topic; may be empty):
 {weaknesses}
 
+REMEMBERED FACTS ABOUT THIS STUDENT (durable things they told you; use them to stay
+consistent - never ask for info that is already here):
+{memory_facts}
+
 SYLLABUS CONTEXT (retrieved for this question):
 {context}
 
@@ -103,6 +107,11 @@ def build_messages(session, user_text: str) -> list[dict]:
 
     weaknesses = _format_weaknesses(session.student, session.subject, user_text)
 
+    from apps.tutoring.services.memory import relevant_memory
+    memory_facts = "\n".join("- " + e.fact for e in relevant_memory(session.student, user_text))
+    if not memory_facts:
+        memory_facts = "(none yet)"
+
     system = SYSTEM_TEMPLATE.format(
         syllabus_name=session.syllabus.name,
         syllabus_level=session.syllabus.get_level_display(),
@@ -115,10 +124,11 @@ def build_messages(session, user_text: str) -> list[dict]:
         style_hint=STYLE_HINTS.get(style, ""),
         pace=pace,
         weaknesses=weaknesses,
+        memory_facts=memory_facts,
         context=context,
     )
 
-    recent = _history_messages(session, user_text, recent=4, relevant=4)
+    recent = _history_messages(session, user_text, recent=6, relevant=4)
 
     return [{"role": "system", "content": system}, *recent, {"role": "user", "content": user_text}], [c.id for c in chunks]
 
@@ -180,6 +190,12 @@ def generate_reply(session, user_text: str) -> tuple[str, dict]:
         "provider": type(provider).__name__,
         "model": getattr(type(provider), "model", "") or "",
     }
+    # Remember durable facts the student stated, for future turns / sessions.
+    try:
+        from apps.tutoring.services.memory import extract_facts
+        extract_facts(session.student, user_text, reply_text)
+    except Exception:
+        pass
     return reply_text, meta
 
 
@@ -196,6 +212,13 @@ def _voice_messages(session, user_text: str, use_rag: bool) -> list[dict]:
         for m in session.messages.all().order_by("-created_at")[:8]
     ][::-1]
     system = VOICE_SYSTEM_TEMPLATE
+    from apps.tutoring.services.memory import relevant_memory
+    mem_lines = "\n".join("- " + e.fact for e in relevant_memory(session.student, user_text))
+    if mem_lines:
+        system += (
+            "\n\nREMEMBERED FACTS ABOUT THIS STUDENT (durable things they told you; "
+            f"stay consistent and never re-ask for these):\n{mem_lines}"
+        )
     if use_rag:
         chunks = retrieve(session.syllabus, user_text, subject=session.subject)
         context = _guarded_context(chunks)
