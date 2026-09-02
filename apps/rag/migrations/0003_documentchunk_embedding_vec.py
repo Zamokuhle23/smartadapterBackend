@@ -18,10 +18,10 @@ def add_pgvector(apps, schema_editor):
     with schema_editor.connection.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
         cur.execute(
-            "ALTER TABLE app_documentchunk ADD COLUMN embedding_vec vector(384)"
+            "ALTER TABLE rag_documentchunk ADD COLUMN embedding_vec vector(384)"
         )
         cur.execute(
-            "CREATE INDEX docchunk_embedding_vec_hnsw ON app_documentchunk "
+            "CREATE INDEX docchunk_embedding_vec_hnsw ON rag_documentchunk "
             "USING hnsw (embedding_vec vector_cosine_ops)"
         )
 
@@ -29,7 +29,7 @@ def add_pgvector(apps, schema_editor):
 def drop_pgvector(apps, schema_editor):
     if schema_editor.connection.vendor == "postgresql":
         with schema_editor.connection.cursor() as cur:
-            cur.execute("ALTER TABLE app_documentchunk DROP COLUMN embedding_vec")
+            cur.execute("ALTER TABLE rag_documentchunk DROP COLUMN embedding_vec")
 
 
 class Migration(migrations.Migration):
