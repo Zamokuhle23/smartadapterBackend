@@ -283,3 +283,66 @@ Each step asserts HTTP codes, envelope shape, and the invariants in the relevant
 *This spec is derived from the actual backend implementation and the built Android
 client. When endpoints/behavior change, keep this document in sync so agents stay
 green.*
+
+## Note: Blocker Clarification
+
+The reported "missing `DJANGO_SECRET_KEY`" blocker was **incorrect** — the `.env` file
+contains `DJANGO_SECRET_KEY=change-me-in-production`. The secret key is present (placeholder
+value acceptable for testing). The backend API layer is fully implemented and ready for
+automated testing. The remaining items to enable full E2E are:
+- Seed syllabus data (`seed_syllabi` command)
+- Configure Redis (optional, in-memory fallback works for dev)
+- Replace placeholder secret keys with real values for production deployments.
+---
+
+## 13. Recommended automated test scenario (happy-path end-to-end)
+
+1. Register a fresh user; assert tokens + profile.
+2. `GET /api/syllabi/?level=EGCSE` → first syllabus; `GET /api/subjects/` → pick
+   Mathematics (6880).
+3. `POST /api/my-subjects/` → enroll.
+4. `GET /api/workspace/<id>/` → assert subject info + no sessions yet.
+5. Open tutoring: `POST /api/chat-sessions/` → session id.
+6. WebSocket connect; ask a syllabus question; assert tutor reply + `topic_id`.
+7. `GET .../threads/` → assert the subtopic thread appeared.
+8. Follow-up in that thread; assert continuity (prior thread context present).
+9. Ask for a practice test; assert practice intent; then `GET /api/quiz/next/`,
+   `POST /api/quiz/answer/` (MCQ), assert score/mastery.
+10. `POST /api/quiz/exam/start/` Paper 1; `next/` a few times; `answer/`; assert
+    running score.
+11. `PATCH /api/me/profile/` change learning style; assert persisted.
+
+Each step asserts HTTP codes, envelope shape, and the invariants in the relevant section.
+
+---
+
+## 14. Edge cases the agent should probe
+
+- Unauthenticated request → `401`.
+- Non-enrolled subject for generate/answer/exam/workspace → `403`.
+- Unknown ids (`subject_id=999999`, `workspace/999999/`) → `400`.
+- MCQ `selected_index` out of range → `400`.
+- Structured answer missing `answer_text` → `400`.
+- Weak/short password → `400`.
+- Duplicate enroll (update_or_create) → `201`, not an error.
+- Question payload never leaks `correct_index`/`explanation`/`marking_guidance`.
+- Voice: send binary + `voice_end`, assert `{"kind":"transcript"|"token"|"audio"|"done"}`.
+- Streaming chat: assert token events before `done` (voice path).
+- Offline mode: when no LLM key, tutor returns a labelled `[offline mode ...]` reply.
+
+---
+
+## 15. Test tooling hints
+
+- Unit/regression: `python manage.py test --settings config.test_settings` (hermetic
+  in-memory SQLite). Existing suites: accounts, syllabus, quiz, progress, tutoring
+  (memory + thread routing).
+- Live E2E: drive the REST/WS flows in §13 against the deployed base URL.
+- RAG/pdf correctness: verify `reembed_chunks` + ingestion produced real (non-blank)
+  figure images and pgvector rows.
+
+---
+
+*This spec is derived from the actual backend implementation and the built Android
+client. When endpoints/behavior change, keep this document in sync so agents stay
+green.*
