@@ -147,7 +147,14 @@ STUDENT ANSWER:
 {answer}
 
 Mark strictly but fairly against the guidance. Award partial credit where some
-marks were earned. Return ONLY valid JSON, no fences:
+marks were earned. Zero-mark rules (apply before anything else):
+- Award 0 when the response makes no attempt at the question: random words,
+  a single unrelated word (e.g. "calculator", "idk"), jokes, or pasted
+  question text with no working. An irrelevant answer earns nothing even if
+  it is long or confident-sounding.
+- Never describe work the student did not show. Base feedback ONLY on what
+  appears in STUDENT ANSWER above.
+Return ONLY valid JSON, no fences:
 {{"awarded": <number>, "max": {marks}, "feedback": "specific feedback citing what
 earned marks and what was missing"}}"""
 
@@ -817,4 +824,48 @@ def grade_structured_answer(question: QuizQuestion, answer_text: str) -> tuple[f
         awarded = 0.0
     awarded = max(0.0, min(max_marks, awarded))
     feedback = str(result.get("feedback", ""))[:2000]
+    if awarded > 0 and _is_no_attempt(
+        answer_text,
+        question.question_text or "",
+        question.marking_guidance or question.explanation or "",
+    ):
+        # Backstop for grader hallucinations: a response with no digits, no
+        # mathematical symbols and no shared vocabulary with the question or
+        # mark scheme (e.g. answering "Calculator") earns nothing, whatever
+        # the model claimed.
+        awarded = 0.0
+        feedback = (
+            "0 marks: your answer makes no attempt at the question - "
+            "show your working and answer to earn marks."
+        )
     return awarded, max_marks, feedback
+
+
+_MATH_SYMBOLS = set("+-*/^=()[]{}<>%√∫∑≤≥≠≈")
+
+_STOPWORDS = frozenset(
+    "the a an and or to of in is it for on with that this as at by be are "
+    "was were from has have had will would can could should there their "
+    "what when where which while your you we they he she him her its our us "
+    "not no yes so if then than too very just".split()
+)
+
+
+def _content_tokens(text: str) -> set[str]:
+    """Lowercase alphanumeric tokens minus stopwords (single letters kept:
+    x, y, A, B, C carry meaning in maths)."""
+    toks = set(re.findall(r"[a-z0-9]+", text.lower()))
+    return {t for t in toks if t not in _STOPWORDS}
+
+
+def _is_no_attempt(answer: str, question: str, guidance: str) -> bool:
+    """True when the answer shares nothing measurable with the question."""
+    ans = answer.strip()
+    if not ans:
+        return True
+    if any(ch.isdigit() for ch in ans):
+        return False  # any number is at least an attempted value
+    if any(ch in _MATH_SYMBOLS for ch in ans):
+        return False  # operators/relations are mathematical working
+    ref = _content_tokens(question) | _content_tokens(guidance)
+    return not (_content_tokens(ans) & ref)

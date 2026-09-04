@@ -250,6 +250,51 @@ class StructuredAnswerTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class NoAttemptGuardTests(TestCase):
+    """Gibberish must earn 0 even if the grader hallucinates marks."""
+
+    def setUp(self):
+        self.syllabus, self.subject, obj = make_maths()
+        self.question = QuizQuestion.objects.create(
+            subject=self.subject,
+            objective=obj,
+            topic_title="Algebra",
+            format=QuizQuestion.Format.STRUCTURED,
+            question_text="Simplify the expression: (3x^2 - 2x + 1) - (x^2 + 4x - 5). Show your working.",
+            options=[],
+            marks=3,
+            marking_guidance="M1 subtract like terms, A1 2x^2 - 6x, A1 +6",
+        )
+
+    def _grade(self, answer, llm_awarded):
+        from apps.quiz.services.generator import grade_structured_answer
+
+        payload = (
+            '{"awarded": %s, "max": 3, '
+            '"feedback": "The student correctly simplified."}' % llm_awarded
+        )
+        with patch(
+            "apps.quiz.services.generator._chat", return_value=payload
+        ):
+            return grade_structured_answer(self.question, answer)
+
+    def test_single_unrelated_word_scores_zero(self):
+        awarded, max_marks, feedback = self._grade("Calculator", 2.0)
+        self.assertEqual(awarded, 0.0)
+        self.assertEqual(max_marks, 3)
+        self.assertIn("no attempt", feedback)
+
+    def test_genuine_working_keeps_llm_marks(self):
+        awarded, _, _ = self._grade("2x^2 - 6x + 6", 3.0)
+        self.assertEqual(awarded, 3.0)
+
+    def test_prose_explanation_sharing_vocabulary_is_kept(self):
+        awarded, _, _ = self._grade(
+            "the square is always positive so the expression has a minimum", 2.0
+        )
+        self.assertEqual(awarded, 2.0)
+
+
 class TopicMatchedWeaknessTests(TestCase):
     """Weaknesses are injected ONLY for the topic the user asks about, and never
     for off-syllabus/meta questions."""
