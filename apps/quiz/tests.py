@@ -648,3 +648,34 @@ class FigureAttachmentTests(TestCase):
         q = QuizQuestion.objects.create(subject=self.subject, format="structured", question_text="Number line x from 1 to 3.", marks=2)
         _attach_figures(q, [bare])
         self.assertEqual(q.figures.count(), 0)
+
+    def test_figure_flag_attaches_without_adapted(self):
+        from apps.quiz.services.generator import _question_from_item
+        from apps.quiz.models import QuizQuestion
+
+        _doc, _fig, chunk = self._make_figured_chunk()
+        q = _question_from_item(
+            self.subject,
+            {"question": "Label parts A, B and C (see diagram).",
+             "format": "structured", "marks": 3,
+             "figure_required": True,  # NOT adapted: still the reuse contract
+             "objective_hint": "Heart"},
+            None, [chunk],
+        )
+        self.assertIsNotNone(q)
+        self.assertEqual(QuizQuestion.objects.get(pk=q.pk).figures.count(), 1)
+
+    def test_prompt_line_forces_diagrams_when_figures_exist(self):
+        from apps.quiz.services.generator import _figure_prompt_line
+
+        _doc, _fig, chunk = self._make_figured_chunk()
+        line = _figure_prompt_line([chunk])
+        self.assertIn("WILL be shown", line)
+        self.assertIn("figure_required", line)
+
+    def test_prompt_line_forbids_bare_refs_without_figures(self):
+        from apps.quiz.services.generator import _figure_prompt_line
+
+        line = _figure_prompt_line([])
+        self.assertIn("No source diagrams are available", line)
+        self.assertIn("figure_required", line)

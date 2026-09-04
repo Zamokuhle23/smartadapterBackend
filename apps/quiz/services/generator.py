@@ -76,6 +76,7 @@ Rules:
   misconceptions. Structured: no options array (use []), realistic "marks".
 - "marking_guidance": model answer plus how marks would be awarded (needed for grading).
 - Never invent a paper label or year that is not shown on the source chunk.
+- {figure_line}
 
 Return ONLY a valid JSON array, no markdown fences, in this exact shape:
 [{{"question": "...", "format": "mcq", "options": ["...","...","...","..."],
@@ -127,10 +128,11 @@ Rules:
   REUSE it. Set "figure_required": true; refer to it as "(see diagram)". Do NOT
   redraw or change its geometry.
   SCENARIO 2 (DRAW a fresh ASCII diagram): if the figure's NUMBERS would vary for a
-  new question, DRAW a brand-new monospace ASCII figure in a ``` ascii code block
-  inside the question text (labelled triangle, axes, number line). Use only ASCII
-  glyphs and align the rows so it reads as a shape. Set "figure_required": false so
-  every student gets a fresh, unique diagram. NEVER a bare "see diagram".
+   new question, DRAW a brand-new monospace ASCII figure in a ``` ascii code block
+   inside the question text (labelled triangle, axes, number line). Use only ASCII
+   glyphs and align the rows so it reads as a shape. Set "figure_required": false so
+   every student gets a fresh, unique diagram. NEVER a bare "see diagram".
+- {figure_line}
 
 Return ONLY a valid JSON object, no fences:
 {{"question": "...", "format": "mcq", "options": ["...","...","...","..."],
@@ -424,6 +426,7 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
         objective_line=objective_line,
         style_line="",
         source_instruction=source_instruction,
+        figure_line=_figure_prompt_line(chunks),
     )
     system = {"role": "system", "content": "You write syllabus-accurate exam questions. Output ONLY valid JSON."}
     raw = _chat([system, {"role": "user", "content": prompt}])
@@ -525,7 +528,9 @@ def _question_from_item(subject, item: dict, objective, chunks,
         source_chunk_ids=[c.id for c in chunks],
     )
     figure_required = bool(item.get("figure_required"))
-    if figure_required and (adapted or force_paper_label):
+    if figure_required:
+        # figure_required=true IS the reuse contract: the real source image
+        # is attached here, no matter the adapted flag.
         _attach_figures(question, chunks)
     if _is_bare_diagram_reference(question):
         # The model promised a diagram ("see diagram" / "In the diagram...")
@@ -555,6 +560,47 @@ def _is_bare_diagram_reference(question) -> bool:
     except Exception:
         has_figures = False
     return not has_figures
+
+
+def _figure_prompt_line(chunks) -> str:
+    """Decide the diagram situation in code, not by model opt-in.
+
+    Returns a prompt line telling the model exactly what to do: when the
+    grounding chunks' pages carry real figures, those images WILL be shown
+    with the question, so the model must write around them; otherwise it
+    must draw ASCII itself or skip diagrams entirely (the bare-reference
+    guard discards anything else).
+    """
+    from django.db.models import Q
+
+    wanted = set()
+    for chunk in chunks or []:
+        if getattr(chunk, "document_id", None) and getattr(chunk, "page_number", None):
+            wanted.add((chunk.document_id, chunk.page_number))
+    has_figures = False
+    if wanted:
+        from apps.rag.models import DocumentFigure
+
+        query = Q()
+        for document_id, page_number in wanted:
+            query |= Q(document_id=document_id, page_number=page_number)
+        has_figures = DocumentFigure.objects.filter(query).exists()
+    if has_figures:
+        return (
+            "DIAGRAMS ATTACHED: figure(s) from the source pages WILL be shown "
+            "to the student together with this exact question. You MUST write "
+            "the question around the diagram (label its parts / read values "
+            "off it), refer to it as (see diagram), and set "
+            '"figure_required": true. Use ONLY labels and values stated in '
+            "the chunks above - never invent labels, numbers or parts. "
+            "Do NOT draw an ASCII diagram as well."
+        )
+    return (
+        "No source diagrams are available for this question: set "
+        '"figure_required": false. Either draw the needed figure yourself '
+        "as a ```ascii block inside the question text, or write the question "
+        "with NO diagram reference at all."
+    )
 
 
 def _attach_figures(question, chunks):
@@ -787,6 +833,7 @@ def next_exam_question(session: ExamSession) -> QuizQuestion | None:
             else "This paper uses STRUCTURED questions - include all parts and realistic marks."
         ),
         context=_build_context(context_chunks)[:4000] or "(no indexed corpus)",
+        figure_line=_figure_prompt_line(context_chunks),
     )
     raw = _chat(
         [
