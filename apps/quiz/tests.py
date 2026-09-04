@@ -353,6 +353,38 @@ class GenerationRetryTests(TestCase):
         self.assertIn("malformed", err)
 
 
+class ServeTimeDanglingTests(TestCase):
+    """Rows whose figures vanished after creation are never served."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+        from apps.accounts.models import User
+
+        self.student = User.objects.create_user("seer", password="x")
+
+    def _row(self, text):
+        return QuizQuestion.objects.create(
+            subject=self.subject,
+            format=QuizQuestion.Format.STRUCTURED,
+            question_text=text,
+            marks=2,
+        )
+
+    def test_dangling_row_is_skipped(self):
+        from apps.quiz.services.selector import next_question_for
+
+        self._row("In the diagram below, find X. (see diagram)")
+        good = self._row("Solve 2x + 3 = 11.")
+        self.assertEqual(
+            next_question_for(self.student, self.subject).id, good.id)
+
+    def test_only_dangling_rows_means_none(self):
+        from apps.quiz.services.selector import next_question_for
+
+        self._row("The table below shows scores. Find the mean.")
+        self.assertIsNone(next_question_for(self.student, self.subject))
+
+
 class WarmBankCommandTests(TestCase):
     def setUp(self):
         self.syllabus, self.subject, self.obj = make_maths()

@@ -568,18 +568,24 @@ def _has_inline_data(text: str) -> bool:
     return len(pipe_lines) >= 2
 
 
+def _text_has_dangling_reference(text, has_figures) -> bool:
+    """Pure check: does this text point at a figure/data table that isn't
+    supplied? Used at creation AND at serve time (figures can vanish later
+    when a document is re-ingested, orphaning old attachments)."""
+    if not _BARE_REFERENCE_RE.search(text or ""):
+        return False
+    if _has_inline_data(text or ""):
+        return False
+    return not has_figures
+
+
 def _is_bare_diagram_reference(question) -> bool:
     """True when the text points at a diagram/data table that isn't there."""
-    text = question.question_text or ""
-    if not _BARE_REFERENCE_RE.search(text):
-        return False
-    if _has_inline_data(text):
-        return False  # ASCII figure or inline data table included
     try:
         has_figures = question.figures.exists()
     except Exception:
         has_figures = False
-    return not has_figures
+    return _text_has_dangling_reference(question.question_text, has_figures)
 
 
 def _repair_with_ascii(question) -> bool:

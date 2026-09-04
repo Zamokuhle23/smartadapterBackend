@@ -46,6 +46,27 @@ def _scope_qs(subject, topic_ids=None, expanded=None, titles=None, objective_ids
     return qs.filter(scope)
 
 
+def _exclude_dangling(qs):
+    """Drop rows whose diagram/data reference dangles NOW.
+
+    Creation-time validation can't catch figures that vanish later: document
+    re-ingestion deletes and re-creates DocumentFigure rows, orphaning old
+    attachments. One annotated query; revisit with a denormalised flag if the
+    bank ever grows large.
+    """
+    from django.db.models import Count
+
+    from apps.quiz.services.generator import _text_has_dangling_reference
+
+    dangling = [
+        row["id"]
+        for row in qs.annotate(nfig=Count("figures")).values(
+            "id", "question_text", "nfig")
+        if _text_has_dangling_reference(row["question_text"], row["nfig"] > 0)
+    ]
+    return qs.exclude(id__in=dangling) if dangling else qs
+
+
 def next_question_for(student, subject, topic_ids=None, objective_ids=None,
                       exclude_ids=None) -> QuizQuestion | None:
     """Pick the next practice question. IDs in exclude_ids (already shown this
@@ -60,6 +81,7 @@ def next_question_for(student, subject, topic_ids=None, objective_ids=None,
     qs = _scope_qs(subject, topic_ids, expanded, titles, objective_ids)
     if exclude_ids:
         qs = qs.exclude(id__in=list(exclude_ids))
+    qs = _exclude_dangling(qs)
     if not qs.exists():
         return None
 
