@@ -538,8 +538,10 @@ def _question_from_item(subject, item: dict, objective, chunks,
         # is attached here, no matter the adapted flag.
         _attach_figures(question, chunks)
     if _is_bare_diagram_reference(question):
-        # The model promised a diagram ("see diagram" / "In the diagram...")
-        # but supplied neither an ASCII block nor an attachable figure.
+        # The model promised a diagram/data it didn't supply. Ask it to draw
+        # just the missing figure instead of throwing the question away.
+        if _repair_with_ascii(question):
+            return question
         # Never serve a question that points at a missing figure.
         question.delete()
         return None
@@ -578,6 +580,48 @@ def _is_bare_diagram_reference(question) -> bool:
     except Exception:
         has_figures = False
     return not has_figures
+
+
+def _repair_with_ascii(question) -> bool:
+    """Draw the missing figure with one extra LLM call and append it.
+
+    Returns True when the question now carries its own ```ascii block (or a
+    markdown data table) and can be served; False when repair failed, in
+    which case the caller drops the item. Any provider error also means
+    False - repair must never break generation.
+    """
+    try:
+        raw = _chat([
+            {"role": "system", "content": (
+                "You draw exam diagrams. Output ONLY the figure, no prose.")},
+            {"role": "user", "content": (
+                "Draw ONLY the figure this question refers to. If it is a "
+                "shape/diagram, reply with a ```ascii monospace block "
+                "(labelled triangle, axes, number line; only A-Z 0-9 "
+                ". | / \\ - _ = + * ()); if it is data/a table, reply with "
+                "a markdown table (| col | col |) holding the COMPLETE data.\n"
+                f"QUESTION:\n{question.question_text}"
+            )},
+        ])
+    except Exception:
+        return False
+    m = re.search(r"```(?:ascii)?\s*\n(.*?)```", raw, re.DOTALL)
+    block = m.group(1).strip() if m else ""
+    if not block:
+        # Maybe it returned a bare markdown table instead.
+        table = [ln for ln in raw.splitlines()
+                 if re.match(r"\s*\|.*\|\s*$", ln)]
+        if len(table) < 2:
+            return False
+        block = "\n".join(table)
+    else:
+        block = "```ascii\n" + block + "\n```"
+    question.question_text = (question.question_text or "").rstrip() + "\n" + block
+    try:
+        question.save(update_fields=["question_text"])
+    except Exception:
+        return False
+    return True
 
 
 def _figure_prompt_line(chunks) -> str:

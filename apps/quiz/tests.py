@@ -319,52 +319,35 @@ class NextGrowsBankTests(TestCase):
 class GenerationRetryTests(TestCase):
     """An all-bare batch gets one strict retry before surfacing an error."""
 
-    BARE = (
-        '[{"question": "In the diagram, triangle ABC is right-angled. '
-        'Find AC. (see diagram)", "format": "structured", "marks": 3, '
-        '"explanation": "Pythagoras.", "marking_guidance": "M1 A1 A1", '
-        '"objective_hint": "Geometry"}]'
-    )
-    GOOD = (
-        '[{"question": "Simplify 6x/9.", "format": "mcq", '
-        '"options": ["2x/3", "3x/2", "6x/3", "x/3"], "correct_index": 0, '
-        '"explanation": "Divide both by 3.", "objective_hint": "Algebra"}]'
-    )
-
     def setUp(self):
         self.syllabus, self.subject, self.obj = make_maths()
 
-    def _run(self, payloads):
+    def _run(self, item_results):
+        from unittest.mock import patch
+
         from apps.quiz.services.generator import generate_questions
 
-        class SeqProvider:
-            def __init__(self):
-                self.calls = 0
-
-            def chat(self, messages):
-                out = payloads[min(self.calls, len(payloads) - 1)]
-                self.calls += 1
-                return out
-
-        provider = SeqProvider()
-        with patch("apps.rag.services.llm.get_chat_provider",
-                   return_value=provider), patch(
+        sentinel = object()
+        with patch("apps.quiz.services.generator._chat",
+                   return_value='[{}]') as chat, patch(
+            "apps.quiz.services.generator._question_from_item",
+            side_effect=item_results) as _qfi, patch(
             "apps.rag.services.retriever.retrieve", return_value=[]
         ):
             try:
                 made = generate_questions(self.subject, count=1)
             except QuizGenerationError as exc:
-                return None, provider.calls, str(exc)
-            return made, provider.calls, ""
+                return None, chat.call_count, str(exc)
+            return made, chat.call_count, ""
 
     def test_retry_succeeds_on_second_attempt(self):
-        made, calls, _ = self._run([self.BARE, self.GOOD])
+        made, calls, _ = self._run([None, object()])
         self.assertIsNotNone(made)
         self.assertEqual(len(made), 1)
         self.assertEqual(calls, 2)
 
     def test_raises_after_two_bad_batches(self):
-        made, calls, err = self._run([self.BARE, self.BARE])
+        made, calls, err = self._run([None, None])
         self.assertIsNone(made)
         self.assertEqual(calls, 2)
         self.assertIn("malformed", err)
@@ -574,15 +557,21 @@ class BareDiagramReferenceTests(TestCase):
         return base
 
     def test_bare_see_diagram_is_rejected(self):
-        from apps.quiz.services.generator import _question_from_item
+        from unittest.mock import patch
+
+        from apps.quiz.services.generator import (
+            QuizGenerationError, _question_from_item)
         from apps.quiz.models import QuizQuestion
 
         before = QuizQuestion.objects.count()
-        q = _question_from_item(
-            self.subject,
-            self._item(question="In the diagram, triangle ABC is right-angled at B. Find AC. (see diagram)"),
-            self.obj, [],
-        )
+        # Repair unavailable offline: drawing the figure fails as well.
+        with patch("apps.quiz.services.generator._chat",
+                   side_effect=QuizGenerationError("No LLM configured")):
+            q = _question_from_item(
+                self.subject,
+                self._item(question="In the diagram, triangle ABC is right-angled at B. Find AC. (see diagram)"),
+                self.obj, [],
+            )
         self.assertIsNone(q)
         self.assertEqual(QuizQuestion.objects.count(), before)  # no orphan row
 
@@ -601,17 +590,22 @@ class BareDiagramReferenceTests(TestCase):
         self.assertIsNotNone(q)
 
     def test_bare_table_reference_is_rejected(self):
-        from apps.quiz.services.generator import _question_from_item
+        from unittest.mock import patch
+
+        from apps.quiz.services.generator import (
+            QuizGenerationError, _question_from_item)
         from apps.quiz.models import QuizQuestion
 
         before = QuizQuestion.objects.count()
-        q = _question_from_item(
-            self.subject,
-            self._item(question="The table below shows the scores of 20 "
-                                "students in a mathematics test. Calculate "
-                                "the mean score."),
-            self.obj, [],
-        )
+        with patch("apps.quiz.services.generator._chat",
+                   side_effect=QuizGenerationError("No LLM configured")):
+            q = _question_from_item(
+                self.subject,
+                self._item(question="The table below shows the scores of 20 "
+                                    "students in a mathematics test. Calculate "
+                                    "the mean score."),
+                self.obj, [],
+            )
         self.assertIsNone(q)
         self.assertEqual(QuizQuestion.objects.count(), before)
 
@@ -635,6 +629,44 @@ class BareDiagramReferenceTests(TestCase):
             self.obj, [],
         )
         self.assertIsNotNone(q)
+
+    def test_bare_reference_is_repaired_with_ascii(self):
+        from unittest.mock import patch
+
+        from apps.quiz.services.generator import _question_from_item
+
+        with patch(
+            "apps.quiz.services.generator._chat",
+            return_value="```ascii\n    A\n   / \\\n  /   \\\n B-----C\n```",
+        ):
+            q = _question_from_item(
+                self.subject,
+                self._item(question="In the diagram, triangle ABC is "
+                                    "right-angled at B. Find AC. (see diagram)"),
+                self.obj, [],
+            )
+        self.assertIsNotNone(q)
+        self.assertIn("```ascii", q.question_text)
+        self.assertIn("B-----C", q.question_text)
+
+    def test_failed_repair_still_rejects(self):
+        from unittest.mock import patch
+
+        from apps.quiz.services.generator import _question_from_item
+        from apps.quiz.models import QuizQuestion
+
+        before = QuizQuestion.objects.count()
+        with patch(
+            "apps.quiz.services.generator._chat",
+            return_value="sorry, no idea",
+        ):
+            q = _question_from_item(
+                self.subject,
+                self._item(question="The table below shows scores. Find the mean."),
+                self.obj, [],
+            )
+        self.assertIsNone(q)
+        self.assertEqual(QuizQuestion.objects.count(), before)
 
 
 class FigureAttachmentTests(TestCase):
