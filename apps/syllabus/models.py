@@ -156,6 +156,16 @@ class SyllabusDocument(models.Model):
     )
     paper_number = models.PositiveSmallIntegerField(null=True, blank=True)  # 1, 2, 3...
     year = models.PositiveIntegerField(null=True, blank=True)  # exam sitting year
+
+    class Session(models.TextChoices):
+        MAY_JUNE = "MJ", "May/June"
+        OCT_NOV = "ON", "Oct/Nov"
+        FEB_MARCH = "FM", "Feb/March"
+
+    session = models.CharField(
+        max_length=2, choices=Session.choices, blank=True, default="",
+        help_text="Exam session within the year (parsed from filename when present)",
+    )
     source = models.CharField(
         max_length=10, choices=Source.choices, default=Source.EGCSE
     )  # IGCSE (primary) or EGCSE (secondary) source flag

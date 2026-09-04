@@ -34,11 +34,24 @@ class DocumentChunk(models.Model):
         return f"Chunk<{self.pk} doc={self.document_id} ord={self.ordinal}>"
 
 
+def figure_upload_to(instance, filename: str) -> str:
+    """Keyed filenames so a file found anywhere resolves to its paper."""
+    key = (instance.stable_key or "").strip() or "unkeyed"
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in key)[:100]
+    return f"figures/{safe}.png"
+
+
 class DocumentFigure(models.Model):
     """
     An image extracted from a syllabus document's page (e.g. a Biology diagram or
     Physics graph). Generated questions whose source chunk points at this page can
     carry the figure so students see the real diagram, not just a text description.
+
+    Identity rules (see stable_key):
+    - physical uniqueness: one figure = one (document, page, position) triple;
+    - stable_key is assigned once and reused across re-ingestions, so questions
+      keep pointing at the same picture;
+    - caption describes WHAT the figure shows (searchable, editable in admin).
     """
 
     document = models.ForeignKey(
@@ -46,11 +59,26 @@ class DocumentFigure(models.Model):
     )
     page_number = models.PositiveSmallIntegerField(null=True, blank=True)  # 1-based PDF page
     ordinal = models.PositiveSmallIntegerField(default=0)  # figure index within the page
-    image = models.ImageField(upload_to="figures/%Y/%m/")
+    stable_key = models.CharField(
+        max_length=120, unique=True, blank=True, default="",
+        help_text="Canonical traceable id, e.g. IGCSE-0580-2024-MJ-P1-p12-f2",
+    )
+    bbox = models.JSONField(
+        null=True, blank=True,
+        help_text="Region rect [x0, y0, x1, y1] in PDF points; used to "
+                  "match figures across re-ingestions so keys stay stable",
+    )
+    image = models.ImageField(upload_to=figure_upload_to)
     caption = models.CharField(max_length=200, blank=True)
 
     class Meta:
         ordering = ("page_number", "ordinal")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["document", "page_number", "ordinal"],
+                name="unique_figure_per_page_position",
+            )
+        ]
 
     def __str__(self):
-        return f"Figure<doc={self.document_id} p{self.page_number}:{self.ordinal}>"
+        return self.stable_key or f"Figure<doc={self.document_id} p{self.page_number}:{self.ordinal}>"

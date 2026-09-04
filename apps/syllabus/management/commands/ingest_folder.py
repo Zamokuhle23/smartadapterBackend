@@ -32,7 +32,8 @@ def classify_filename(name: str) -> dict:
       '0620_w17_ms_21.pdf'           -> Cambridge-style mark_scheme, paper 2, 2017
     """
     lowered = name.lower()
-    info = {"doc_type": SyllabusDocument.DocType.NOTES, "paper_number": None, "year": None}
+    info = {"doc_type": SyllabusDocument.DocType.NOTES, "paper_number": None, "year": None,
+            "session": ""}
 
     # ---- Cambridge/IGCSE style: <code>_<session><yy>_<qp|ms>_<variant>.pdf ----
     cam = re.search(
@@ -45,6 +46,9 @@ def classify_filename(name: str) -> dict:
         else:
             info["doc_type"] = SyllabusDocument.DocType.MARK_SCHEME
         info["year"] = 2000 + int(cam["yy"])
+        from apps.syllabus.services.figure_keys import SESSION_LETTERS
+
+        info["session"] = SESSION_LETTERS[cam["sess"]]
         if cam["var"]:
             variant = int(cam["var"])
             info["paper_number"] = max(1, variant // 10)

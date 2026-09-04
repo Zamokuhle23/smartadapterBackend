@@ -83,10 +83,18 @@ class Command(BaseCommand):
                     subject=subject,
                     title=doc_title,
                     source=source,
-                    **provenance,
+                    session=provenance.get("session", ""),
+                    **{k: v for k, v in provenance.items() if k != "session"},
                 )
                 with open(path, "rb") as fh:
                     doc.file.save(name, ContentFile(fh.read()), save=True)
+                if not self._cover_ok(doc, name):
+                    doc.file.delete(save=False)
+                    doc.delete()
+                    skipped += 1
+                    self.stdout.write(self.style.WARNING(
+                        f"  SKIP {name}: cover does not mention the subject"))
+                    continue
                 n = process_document(doc)
                 ok += 1
                 if ok % 25 == 0 or i <= 3:
@@ -100,6 +108,21 @@ class Command(BaseCommand):
         )
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _cover_ok(doc, filename: str) -> bool:
+        """Quarantine mislabeled files: the cover must mention a subject code.
+
+        Accepts the EGCSE code (subject.code) or a 4-digit Cambridge code
+        from the filename. Unreadable covers pass (never quarantine blind).
+        """
+        import re
+
+        from apps.syllabus.services.ingestion import verify_cover_subject
+
+        codes = {doc.subject.code} if doc.subject else set()
+        codes.update(re.findall(r"\d{4}", filename))
+        return verify_cover_subject(doc.file.path, codes)
+
     @staticmethod
     def _content_root() -> str:
         """Canonical content root inside the backend (backend/content)."""
