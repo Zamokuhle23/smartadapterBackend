@@ -316,6 +316,44 @@ class NextGrowsBankTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class WarmBankCommandTests(TestCase):
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+
+    def test_warms_to_total_in_batches(self):
+        from unittest.mock import patch
+
+        calls = []
+
+        def fake_generate(subject, **kwargs):
+            calls.append(kwargs)
+            return [object() for _ in range(kwargs["count"])]
+
+        from django.core.management import call_command
+
+        with patch(
+            "apps.quiz.management.commands.warm_bank.generate_questions",
+            side_effect=fake_generate,
+        ):
+            call_command("warm_bank", "--subject-code", self.subject.code,
+                         "--total", "5", "--batch", "3")
+        self.assertEqual([c["count"] for c in calls], [3, 2])
+
+    def test_aborts_after_repeated_failure(self):
+        from unittest.mock import patch
+
+        from django.core.management import call_command, CommandError
+        from apps.quiz.services.generator import QuizGenerationError
+
+        with patch(
+            "apps.quiz.management.commands.warm_bank.generate_questions",
+            side_effect=QuizGenerationError("bad model output"),
+        ):
+            with self.assertRaises(CommandError):
+                call_command("warm_bank", "--subject-code", self.subject.code,
+                             "--total", "4", "--batch", "2")
+
+
 class NoAttemptGuardTests(TestCase):
     """Gibberish must earn 0 even if the grader hallucinates marks."""
 
