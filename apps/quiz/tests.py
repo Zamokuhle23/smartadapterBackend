@@ -352,6 +352,52 @@ class ProvenanceSourceTests(TestCase):
         self.assertEqual(_preferred_source([]), "")
 
 
+class BareDiagramReferenceTests(TestCase):
+    """A question must never point at a diagram that isn't there."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+
+    def _item(self, **overrides):
+        base = {
+            "question": "Triangle ABC is right-angled at B. AB = 8 cm, BC = 6 cm. Find AC.",
+            "format": "structured",
+            "marks": 3,
+            "explanation": "Pythagoras.",
+            "marking_guidance": "M1 + A1 + A1",
+            "objective_hint": "Pythagoras",
+        }
+        base.update(overrides)
+        return base
+
+    def test_bare_see_diagram_is_rejected(self):
+        from apps.quiz.services.generator import _question_from_item
+        from apps.quiz.models import QuizQuestion
+
+        before = QuizQuestion.objects.count()
+        q = _question_from_item(
+            self.subject,
+            self._item(question="In the diagram, triangle ABC is right-angled at B. Find AC. (see diagram)"),
+            self.obj, [],
+        )
+        self.assertIsNone(q)
+        self.assertEqual(QuizQuestion.objects.count(), before)  # no orphan row
+
+    def test_diagram_ref_with_ascii_block_is_kept(self):
+        from apps.quiz.services.generator import _question_from_item
+
+        text = ("In the diagram, triangle ABC is right-angled at B. Find AC.\n"
+                "```ascii\n    A\n   / |\n  /  |\n B---C\n```")
+        q = _question_from_item(self.subject, self._item(question=text), self.obj, [])
+        self.assertIsNotNone(q)
+
+    def test_plain_question_without_reference_is_kept(self):
+        from apps.quiz.services.generator import _question_from_item
+
+        q = _question_from_item(self.subject, self._item(), self.obj, [])
+        self.assertIsNotNone(q)
+
+
 class FigureAttachmentTests(TestCase):
     """Real diagrams attach only when the model flags figure_required=true."""
 

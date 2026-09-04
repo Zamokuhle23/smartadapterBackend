@@ -504,7 +504,34 @@ def _question_from_item(subject, item: dict, objective, chunks,
     figure_required = bool(item.get("figure_required"))
     if figure_required and (adapted or force_paper_label):
         _attach_figures(question, chunks)
+    if _is_bare_diagram_reference(question):
+        # The model promised a diagram ("see diagram" / "In the diagram...")
+        # but supplied neither an ASCII block nor an attachable figure.
+        # Never serve a question that points at a missing figure.
+        question.delete()
+        return None
     return question
+
+
+_BARE_DIAGRAM_RE = re.compile(
+    r"see diagram|in the diagram|the diagram (shows|below)|"
+    r"diagram below|as shown in (the )?(diagram|fig)",
+    re.IGNORECASE,
+)
+
+
+def _is_bare_diagram_reference(question) -> bool:
+    """True when the text points at a diagram that isn't actually there."""
+    text = question.question_text or ""
+    if not _BARE_DIAGRAM_RE.search(text):
+        return False
+    if "```" in text:
+        return False  # ASCII figure drawn inline
+    try:
+        has_figures = question.figures.exists()
+    except Exception:
+        has_figures = False
+    return not has_figures
 
 
 def _attach_figures(question, chunks):
