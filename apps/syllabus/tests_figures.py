@@ -135,3 +135,34 @@ class FigureStoreTests(TestCase):
         self.assertEqual(keys1, keys2)
         self.assertTrue(
             all(k.startswith("EGCSE-6880-2024-P2-p1-f") for k in keys1))
+
+    def test_new_regions_dont_collide_with_existing_ordinals(self):
+        from apps.rag.models import DocumentFigure
+        from apps.syllabus.models import Subject, Syllabus, SyllabusDocument
+        from apps.syllabus.services.ingestion import _store_document_figures
+
+        tmp = tempfile.mkdtemp()
+        try:
+            with override_settings(MEDIA_ROOT=tmp):
+                syl = Syllabus.objects.create(level="EGCSE", name="E",
+                                              version="1")
+                subj = Subject.objects.create(syllabus=syl, code="6880",
+                                              name="Mathematics")
+                doc = SyllabusDocument(
+                    syllabus=syl, subject=subj, title="Maths P2 2024",
+                    source="egcse", year=2024, paper_number=2)
+                doc.file.save("t.pdf", ContentFile(_synthetic_pdf()),
+                              save=True)
+                # Legacy row squatting ordinal 0 with no bbox (unmatchable).
+                DocumentFigure.objects.create(
+                    document=doc, page_number=1, ordinal=0,
+                    stable_key="EGCSE-6880-2024-P2-p1-f0")
+                n = _store_document_figures(doc)
+                keys = sorted(DocumentFigure.objects.filter(
+                    document=doc).values_list("stable_key", flat=True))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        # No IntegrityError, legacy row replaced by the fresh keyed one.
+        self.assertGreater(n, 0)
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertTrue(all(keys))

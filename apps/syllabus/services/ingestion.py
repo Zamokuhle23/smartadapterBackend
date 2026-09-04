@@ -424,6 +424,12 @@ def _store_document_figures(document) -> int:
     existing = [f for f in DocumentFigure.objects.filter(document=document)]
     unmatched = list(existing)
     kept = 0
+    # New regions must not reuse ordinals that existing rows (matched or
+    # stale) still occupy; start past the page maximum.
+    ordinal_counter = {}
+    for f in existing:
+        ordinal_counter[f.page_number] = max(
+            ordinal_counter.get(f.page_number, -1), f.ordinal)
 
     def match(rect, page):
         best, best_iou = None, 0.0
@@ -438,10 +444,9 @@ def _store_document_figures(document) -> int:
             return best
         return None
 
-    ordinal_counter = {}
     for f in figures:
         page = f["page"]
-        ordinal_counter[page] = ordinal_counter.get(page, 0)
+        ordinal_counter[page] = ordinal_counter.get(page, -1) + 1
         row = match(f.get("rect"), page)
         if row is None:
             key = _unique_key(document, figure_key_for(document, page,
@@ -456,7 +461,6 @@ def _store_document_figures(document) -> int:
                                              row.ordinal))
             if row.bbox != f.get("rect"):
                 row.bbox = f.get("rect")
-        ordinal_counter[page] += 1
         if not row.image or not row.image.storage.exists(row.image.name):
             row.image.save(f"{row.stable_key}.png",
                            ContentFile(f["image"]), save=False)
