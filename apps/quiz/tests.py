@@ -316,6 +316,60 @@ class NextGrowsBankTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class GenerationRetryTests(TestCase):
+    """An all-bare batch gets one strict retry before surfacing an error."""
+
+    BARE = (
+        '[{"question": "In the diagram, triangle ABC is right-angled. '
+        'Find AC. (see diagram)", "format": "structured", "marks": 3, '
+        '"explanation": "Pythagoras.", "marking_guidance": "M1 A1 A1", '
+        '"objective_hint": "Geometry"}]'
+    )
+    GOOD = (
+        '[{"question": "Simplify 6x/9.", "format": "mcq", '
+        '"options": ["2x/3", "3x/2", "6x/3", "x/3"], "correct_index": 0, '
+        '"explanation": "Divide both by 3.", "objective_hint": "Algebra"}]'
+    )
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+
+    def _run(self, payloads):
+        from apps.quiz.services.generator import generate_questions
+
+        class SeqProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, messages):
+                out = payloads[min(self.calls, len(payloads) - 1)]
+                self.calls += 1
+                return out
+
+        provider = SeqProvider()
+        with patch("apps.rag.services.llm.get_chat_provider",
+                   return_value=provider), patch(
+            "apps.rag.services.retriever.retrieve", return_value=[]
+        ):
+            try:
+                made = generate_questions(self.subject, count=1)
+            except QuizGenerationError as exc:
+                return None, provider.calls, str(exc)
+            return made, provider.calls, ""
+
+    def test_retry_succeeds_on_second_attempt(self):
+        made, calls, _ = self._run([self.BARE, self.GOOD])
+        self.assertIsNotNone(made)
+        self.assertEqual(len(made), 1)
+        self.assertEqual(calls, 2)
+
+    def test_raises_after_two_bad_batches(self):
+        made, calls, err = self._run([self.BARE, self.BARE])
+        self.assertIsNone(made)
+        self.assertEqual(calls, 2)
+        self.assertIn("malformed", err)
+
+
 class WarmBankCommandTests(TestCase):
     def setUp(self):
         self.syllabus, self.subject, self.obj = make_maths()

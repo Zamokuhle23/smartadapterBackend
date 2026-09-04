@@ -66,9 +66,12 @@ Rules:
   or simple diagram. Use only ASCII glyphs (A-Z, a-z, 0-9, . | / \\ - _ = + * ())
   and align the rows so it reads as a shape; put each label letter on its own
   spot. Set "figure_required": false. This is how each student gets a FRESH,
-  unique diagram so questions never look identical. NEVER leave a bare "see
-  diagram" with no drawing.
-  * Never invent a figure, label or value that is not implied by the source chunk.
+   unique diagram so questions never look identical. NEVER leave a bare "see
+   diagram" with no drawing.
+   * Never invent a figure, label or value that is not implied by the source chunk.
+ - Responses that mention a diagram ("see diagram", "In the diagram", ...) but
+   contain no ```ascii drawing are automatically discarded and earn you nothing.
+   When in doubt, draw the ASCII block.
 - MCQ: exactly 4 options, only ONE clearly correct, distractors based on real
   misconceptions. Structured: no options array (use []), realistic "marks".
 - "marking_guidance": model answer plus how marks would be awarded (needed for grading).
@@ -161,6 +164,14 @@ earned marks and what was missing"}}"""
 
 class QuizGenerationError(Exception):
     pass
+
+
+RETRY_SUFFIX = (
+    "\nSTRICT REMINDER: your previous response was discarded because it "
+    "referenced a diagram without drawing it. Either include the ```ascii "
+    "drawing inside the question text, or write the question with NO "
+    "diagram reference at all."
+)
 
 
 def _extract_json(text: str, open_char: str = "[", close_char: str = "]"):
@@ -414,23 +425,28 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
         style_line="",
         source_instruction=source_instruction,
     )
-    raw = _chat(
-        [
-            {"role": "system", "content": "You write syllabus-accurate exam questions. Output ONLY valid JSON."},
-            {"role": "user", "content": prompt},
-        ]
-    )
+    system = {"role": "system", "content": "You write syllabus-accurate exam questions. Output ONLY valid JSON."}
+    raw = _chat([system, {"role": "user", "content": prompt}])
 
-    items = _extract_json_array(raw)
     # Pin each returned question to a (round-robin) selected objective so the bank
     # spans several skills instead of repeating one.
     pins = topic_objs or ([objective] if objective else [])
-    created = []
-    for idx, item in enumerate(items):
-        pin = pins[idx % len(pins)] if pins else None
-        q = _question_from_item(subject, item, pin, chunks, default_difficulty=difficulty)
-        if q is not None:
-            created.append(q)
+
+    def _attempt(raw_text):
+        made = []
+        for idx, item in enumerate(_extract_json_array(raw_text)):
+            pin = pins[idx % len(pins)] if pins else None
+            q = _question_from_item(subject, item, pin, chunks, default_difficulty=difficulty)
+            if q is not None:
+                made.append(q)
+        return made
+
+    created = _attempt(raw)
+    if not created:
+        # The batch was likely all bare-diagram references. One retry with an
+        # explicit reminder before giving up and surfacing an error.
+        raw = _chat([system, {"role": "user", "content": prompt + RETRY_SUFFIX}])
+        created = _attempt(raw)
     if not created:
         raise QuizGenerationError("All generated questions were malformed - try again.")
     return created
