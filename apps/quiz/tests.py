@@ -250,6 +250,51 @@ class StructuredAnswerTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class NextGrowsBankTests(TestCase):
+    """When the bank is exhausted, /next/ grows it instead of looping one row."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+        self.user = User.objects.create_user("looper", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.q1 = QuizQuestion.objects.create(
+            subject=self.subject,
+            objective=self.obj,
+            topic_title="Algebra",
+            format=QuizQuestion.Format.STRUCTURED,
+            question_text="First and only bank question.",
+            options=[],
+            marks=2,
+        )
+        QuizAttempt.objects.create(student=self.user, question=self.q1, correct=False)
+
+    def _next_id(self):
+        response = self.client.get(f"/api/quiz/next/?subject_id={self.subject.id}")
+        self.assertEqual(response.status_code, 200)
+        return response.json()["id"]
+
+    def test_exhausted_bank_serves_fresh_question(self):
+        def fake_generate(subject, **kwargs):
+            return [QuizQuestion.objects.create(
+                subject=subject,
+                format=QuizQuestion.Format.STRUCTURED,
+                question_text="Fresh generated question.",
+                marks=2,
+            )]
+
+        with patch("apps.quiz.api.generate_questions", side_effect=fake_generate):
+            self.assertNotEqual(self._next_id(), self.q1.id)
+
+    def test_generation_failure_falls_back_to_recycled(self):
+        with patch(
+            "apps.quiz.api.generate_questions",
+            side_effect=QuizGenerationError("No LLM configured"),
+        ):
+            self.assertEqual(self._next_id(), self.q1.id)
+
+
 class NoAttemptGuardTests(TestCase):
     """Gibberish must earn 0 even if the grader hallucinates marks."""
 

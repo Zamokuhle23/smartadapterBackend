@@ -150,7 +150,39 @@ class NextQuestionView(APIView):
         )
         if question is None:
             return Response({"detail": "no_questions"}, status=404)
+        if QuizAttempt.objects.filter(
+            student=request.user, question=question
+        ).exists():
+            # Bank exhausted for this student: the selector is recycling an
+            # already-answered question. Grow the bank so practice keeps
+            # serving fresh questions instead of looping on one.
+            question = self._grow_and_repick(
+                request, subject, topic_ids, objective_ids, fallback=question
+            )
         return Response(QuestionPublicSerializer(question, context={"request": self.request}).data)
+
+    @staticmethod
+    def _grow_and_repick(request, subject, topic_ids, objective_ids, fallback):
+        """Generate fresh questions, then re-pick. Falls back to the recycled
+        question when generation fails (offline LLM, all items malformed)."""
+        from apps.syllabus.services.subject_map import tier_for
+
+        try:
+            generate_questions(
+                subject,
+                count=3,
+                tier=tier_for(request.user, subject),
+                topic_ids=topic_ids,
+                objective_ids=objective_ids,
+            )
+        except QuizGenerationError:
+            return fallback
+        fresh = next_question_for(
+            request.user, subject,
+            topic_ids=topic_ids if not objective_ids else None,
+            objective_ids=objective_ids,
+        )
+        return fresh if fresh is not None else fallback
 
 
 class AnswerQuizView(APIView):
