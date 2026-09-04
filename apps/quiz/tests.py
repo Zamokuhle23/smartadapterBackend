@@ -600,6 +600,42 @@ class BareDiagramReferenceTests(TestCase):
         q = _question_from_item(self.subject, self._item(), self.obj, [])
         self.assertIsNotNone(q)
 
+    def test_bare_table_reference_is_rejected(self):
+        from apps.quiz.services.generator import _question_from_item
+        from apps.quiz.models import QuizQuestion
+
+        before = QuizQuestion.objects.count()
+        q = _question_from_item(
+            self.subject,
+            self._item(question="The table below shows the scores of 20 "
+                                "students in a mathematics test. Calculate "
+                                "the mean score."),
+            self.obj, [],
+        )
+        self.assertIsNone(q)
+        self.assertEqual(QuizQuestion.objects.count(), before)
+
+    def test_inline_markdown_table_is_kept(self):
+        from apps.quiz.services.generator import _question_from_item
+
+        text = ("The table below shows the scores of 20 students. "
+                "Calculate the mean score.\n"
+                "| Score | Frequency |\n|---|---| \n| 5 | 8 |\n| 6 | 12 |")
+        q = _question_from_item(self.subject, self._item(question=text),
+                                self.obj, [])
+        self.assertIsNotNone(q)
+
+    def test_graph_mention_without_below_is_kept(self):
+        from apps.quiz.services.generator import _question_from_item
+
+        q = _question_from_item(
+            self.subject,
+            self._item(question="Explain why the graph of y = (x - 2)^2 + 3 "
+                                "has a minimum at (2, 3)."),
+            self.obj, [],
+        )
+        self.assertIsNotNone(q)
+
 
 class FigureAttachmentTests(TestCase):
     """Real diagrams attach only when the model flags figure_required=true."""

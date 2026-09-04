@@ -72,6 +72,10 @@ Rules:
  - Responses that mention a diagram ("see diagram", "In the diagram", ...) but
    contain no ```ascii drawing are automatically discarded and earn you nothing.
    When in doubt, draw the ASCII block.
+- Data tables and graph data: if the item needs a table, frequency table or
+   data set, include the COMPLETE data inline as a markdown table
+   (| Score | Frequency |, one row per entry). NEVER write "the table below"
+   without the table - a question without its data is discarded.
 - MCQ: exactly 4 options, only ONE clearly correct, distractors based on real
   misconceptions. Structured: no options array (use []), realistic "marks".
 - "marking_guidance": model answer plus how marks would be awarded (needed for grading).
@@ -133,6 +137,8 @@ Rules:
    glyphs and align the rows so it reads as a shape. Set "figure_required": false so
    every student gets a fresh, unique diagram. NEVER a bare "see diagram".
 - {figure_line}
+- Data tables: include the COMPLETE data inline as a markdown table
+  (| Score | Frequency |). NEVER write "the table below" without the table.
 
 Return ONLY a valid JSON object, no fences:
 {{"question": "...", "format": "mcq", "options": ["...","...","...","..."],
@@ -540,20 +546,33 @@ def _question_from_item(subject, item: dict, objective, chunks,
     return question
 
 
-_BARE_DIAGRAM_RE = re.compile(
+_BARE_REFERENCE_RE = re.compile(
     r"see diagram|in the diagram|the diagram (shows|below)|"
-    r"diagram below|as shown in (the )?(diagram|fig)",
+    r"diagram below|as shown in (the )?(diagram|fig)|"
+    r"(table|graph|chart|figure) (below|shows)|data below|"
+    r"following (table|graph|chart|figure|data)|"
+    r"table of values below",
     re.IGNORECASE,
 )
 
 
-def _is_bare_diagram_reference(question) -> bool:
-    """True when the text points at a diagram that isn't actually there."""
-    text = question.question_text or ""
-    if not _BARE_DIAGRAM_RE.search(text):
-        return False
+def _has_inline_data(text: str) -> bool:
+    """True when the figure/data travels inside the text itself: a fenced
+    ASCII block or a markdown pipe-table (2+ |...| lines)."""
     if "```" in text:
-        return False  # ASCII figure drawn inline
+        return True
+    pipe_lines = [ln for ln in text.splitlines()
+                  if re.match(r"\s*\|.*\|\s*$", ln)]
+    return len(pipe_lines) >= 2
+
+
+def _is_bare_diagram_reference(question) -> bool:
+    """True when the text points at a diagram/data table that isn't there."""
+    text = question.question_text or ""
+    if not _BARE_REFERENCE_RE.search(text):
+        return False
+    if _has_inline_data(text):
+        return False  # ASCII figure or inline data table included
     try:
         has_figures = question.figures.exists()
     except Exception:
