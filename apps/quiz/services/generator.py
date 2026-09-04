@@ -169,10 +169,9 @@ class QuizGenerationError(Exception):
 
 
 RETRY_SUFFIX = (
-    "\nSTRICT REMINDER: your previous response was discarded because it "
-    "referenced a diagram without drawing it. Either include the ```ascii "
-    "drawing inside the question text, or write the question with NO "
-    "diagram reference at all."
+    "\nSTRICT REMINDER: your previous response was rejected. Rewrite the SAME "
+    "question(s) with NO diagram, NO figure and NO 'see diagram' wording at "
+    "all. Pure text and numbers only."
 )
 
 

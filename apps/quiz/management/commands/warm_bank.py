@@ -41,12 +41,10 @@ class Command(BaseCommand):
         total = max(1, options["total"])
         batch = max(1, min(10, options["batch"]))
         created = 0
-        failures = 0
-        while created < total:
-            if failures >= 3:
-                raise CommandError(
-                    f"Aborting after 3 consecutive failures "
-                    f"({created}/{total} created)")
+        attempts = 0
+        max_attempts = (total // batch + 1) * 3
+        while created < total and attempts < max_attempts:
+            attempts += 1
             try:
                 made = generate_questions(
                     subject,
@@ -55,12 +53,15 @@ class Command(BaseCommand):
                     topic_ids=topic_ids,
                 )
             except QuizGenerationError as exc:
-                failures += 1
                 self.stderr.write(f"batch failed ({exc}); continuing")
                 continue
-            failures = 0
             created += len(made)
             self.stdout.write(f"+{len(made)} ({created}/{total})")
+        if created == 0:
+            raise CommandError("No questions created - all batches failed")
+        if created < total:
+            self.stderr.write(
+                f"warning: only {created}/{total} after {attempts} batches")
         self.stdout.write(
             self.style.SUCCESS(f"Bank warmed: {created} questions "
                                f"for {subject.code}"))
