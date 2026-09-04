@@ -669,7 +669,7 @@ class BareDiagramReferenceTests(TestCase):
 
         with patch(
             "apps.quiz.services.generator._chat",
-            return_value="```ascii\n    A\n   / \\\n  /   \\\n B-----C\n```",
+            side_effect=["```ascii\nA\n|\n| 3 cm\nB---C\n```", "YES"],
         ):
             q = _question_from_item(
                 self.subject,
@@ -679,7 +679,27 @@ class BareDiagramReferenceTests(TestCase):
             )
         self.assertIsNotNone(q)
         self.assertIn("```ascii", q.question_text)
-        self.assertIn("B-----C", q.question_text)
+        self.assertIn("B---C", q.question_text)
+
+    def test_judge_rejects_bad_drawing(self):
+        from unittest.mock import patch
+
+        from apps.quiz.services.generator import _question_from_item
+        from apps.quiz.models import QuizQuestion
+
+        before = QuizQuestion.objects.count()
+        with patch(
+            "apps.quiz.services.generator._chat",
+            side_effect=["```ascii\nA\n|\n| 3 cm\nB---C\n```", "NO"],
+        ):
+            q = _question_from_item(
+                self.subject,
+                self._item(question="In the diagram, triangle ABC is "
+                                    "right-angled at B. Find AC. (see diagram)"),
+                self.obj, [],
+            )
+        self.assertIsNone(q)
+        self.assertEqual(QuizQuestion.objects.count(), before)
 
     def test_failed_repair_still_rejects(self):
         from unittest.mock import patch

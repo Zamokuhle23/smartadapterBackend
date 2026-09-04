@@ -589,12 +589,12 @@ def _is_bare_diagram_reference(question) -> bool:
 
 
 def _repair_with_ascii(question) -> bool:
-    """Draw the missing figure with one extra LLM call and append it.
+    """Draw the missing figure, verify it, and append it.
 
-    Returns True when the question now carries its own ```ascii block (or a
-    markdown data table) and can be served; False when repair failed, in
-    which case the caller drops the item. Any provider error also means
-    False - repair must never break generation.
+    Returns True when the question now carries a checked figure and can be
+    served; False when drawing or verification failed, in which case the
+    caller drops the item. Any provider error also means False - repair must
+    never break generation.
     """
     try:
         raw = _chat([
@@ -603,9 +603,23 @@ def _repair_with_ascii(question) -> bool:
             {"role": "user", "content": (
                 "Draw ONLY the figure this question refers to. If it is a "
                 "shape/diagram, reply with a ```ascii monospace block "
-                "(labelled triangle, axes, number line; only A-Z 0-9 "
-                ". | / \\ - _ = + * ()); if it is data/a table, reply with "
-                "a markdown table (| col | col |) holding the COMPLETE data.\n"
+                "(only A-Z 0-9 . | / \\ - _ = + * ()). If it is data/a "
+                "table, reply with a markdown table (| col | col |) holding "
+                "the COMPLETE data.\n"
+                "Construction rules for triangles: put the right angle at "
+                "the stated vertex using | for the vertical side and --- "
+                "for the horizontal side, / or \\ only for the hypotenuse. "
+                "Every vertex label sits ON the shape, touching its lines. "
+                "Side lengths sit alongside the side they measure. No "
+                "floating or detached parts.\n"
+                "Example right-angled at B:\n"
+                "```ascii\n"
+                "A\n"
+                "|\n"
+                "| 3 cm\n"
+                "|________\n"
+                "B   4 cm   C\n"
+                "```\n"
                 f"QUESTION:\n{question.question_text}"
             )},
         ])
@@ -613,6 +627,7 @@ def _repair_with_ascii(question) -> bool:
         return False
     m = re.search(r"```(?:ascii)?\s*\n(.*?)```", raw, re.DOTALL)
     block = m.group(1).strip() if m else ""
+    is_table = False
     if not block:
         # Maybe it returned a bare markdown table instead.
         table = [ln for ln in raw.splitlines()
@@ -620,14 +635,56 @@ def _repair_with_ascii(question) -> bool:
         if len(table) < 2:
             return False
         block = "\n".join(table)
+        is_table = True
     else:
         block = "```ascii\n" + block + "\n```"
+    if not is_table and not _ascii_passes_checks(
+            question.question_text or "", block):
+        return False
+    if not is_table and not _judge_ascii(question.question_text or "", block):
+        return False
     question.question_text = (question.question_text or "").rstrip() + "\n" + block
     try:
         question.save(update_fields=["question_text"])
     except Exception:
         return False
     return True
+
+
+def _ascii_passes_checks(question_text: str, block: str) -> bool:
+    """Cheap structural checks before paying for a judge call."""
+    lines = [ln.rstrip() for ln in block.splitlines() if ln.strip()]
+    if len(lines) < 4 or len(lines) > 20:
+        return False
+    if any(len(ln) > 40 for ln in lines):
+        return False
+    labels = set(re.findall(r"\b[A-Z]\b", question_text))
+    inner = block
+    if inner.startswith("```"):
+        inner = "\n".join(inner.splitlines()[1:])
+    if inner.rstrip().endswith("```"):
+        inner = "\n".join(inner.splitlines()[:-1])
+    return all(lbl in inner for lbl in labels)
+
+
+def _judge_ascii(question_text: str, block: str) -> bool:
+    """Ask the model whether its own drawing is actually correct."""
+    try:
+        verdict = _chat([
+            {"role": "system", "content": (
+                "You inspect exam diagrams. Reply with a single word.")},
+            {"role": "user", "content": (
+                "Does this figure correctly illustrate the question? Reply "
+                "YES only if every labelled point sits ON the shape (none "
+                "floating detached), the shape type matches, measurements "
+                "sit alongside the side they measure, and there are no "
+                "stray disconnected parts. Otherwise reply NO.\n"
+                f"QUESTION:\n{question_text}\nFIGURE:\n{block}"
+            )},
+        ])
+    except Exception:
+        return False
+    return verdict.strip().upper().startswith("YES")
 
 
 def _figure_prompt_line(chunks) -> str:
