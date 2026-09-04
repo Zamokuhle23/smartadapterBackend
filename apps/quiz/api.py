@@ -143,10 +143,13 @@ class NextQuestionView(APIView):
         # getlist() and split each value on commas to cover both encodings.
         topic_ids = _parse_id_list(request.query_params.getlist("topics"))
         objective_ids = _parse_id_list(request.query_params.getlist("objectives"))
+        # IDs already shown this session (answered or skipped): never repeat them.
+        exclude_ids = _parse_id_list(request.query_params.getlist("exclude"))
         question = next_question_for(
             request.user, subject,
             topic_ids=topic_ids if not objective_ids else None,
             objective_ids=objective_ids,
+            exclude_ids=exclude_ids,
         )
         if question is None:
             return Response({"detail": "no_questions"}, status=404)
@@ -157,12 +160,14 @@ class NextQuestionView(APIView):
             # already-answered question. Grow the bank so practice keeps
             # serving fresh questions instead of looping on one.
             question = self._grow_and_repick(
-                request, subject, topic_ids, objective_ids, fallback=question
+                request, subject, topic_ids, objective_ids, exclude_ids,
+                fallback=question,
             )
         return Response(QuestionPublicSerializer(question, context={"request": self.request}).data)
 
     @staticmethod
-    def _grow_and_repick(request, subject, topic_ids, objective_ids, fallback):
+    def _grow_and_repick(request, subject, topic_ids, objective_ids,
+                         exclude_ids, fallback):
         """Generate fresh questions, then re-pick. Falls back to the recycled
         question when generation fails (offline LLM, all items malformed)."""
         from apps.syllabus.services.subject_map import tier_for
@@ -181,6 +186,7 @@ class NextQuestionView(APIView):
             request.user, subject,
             topic_ids=topic_ids if not objective_ids else None,
             objective_ids=objective_ids,
+            exclude_ids=exclude_ids,
         )
         return fresh if fresh is not None else fallback
 

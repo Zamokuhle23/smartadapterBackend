@@ -46,7 +46,11 @@ def _scope_qs(subject, topic_ids=None, expanded=None, titles=None, objective_ids
     return qs.filter(scope)
 
 
-def next_question_for(student, subject, topic_ids=None, objective_ids=None) -> QuizQuestion | None:
+def next_question_for(student, subject, topic_ids=None, objective_ids=None,
+                      exclude_ids=None) -> QuizQuestion | None:
+    """Pick the next practice question. IDs in exclude_ids (already shown this
+    session, e.g. skipped) are never returned; when nothing fresh remains,
+    returns None so the caller grows the bank instead of looping one row."""
     expanded = _expanded_topic_ids(topic_ids) if topic_ids else None
     titles = None
     if expanded:
@@ -54,6 +58,8 @@ def next_question_for(student, subject, topic_ids=None, objective_ids=None) -> Q
 
         titles = list(Topic.objects.filter(id__in=expanded).values_list("title", flat=True))
     qs = _scope_qs(subject, topic_ids, expanded, titles, objective_ids)
+    if exclude_ids:
+        qs = qs.exclude(id__in=list(exclude_ids))
     if not qs.exists():
         return None
 

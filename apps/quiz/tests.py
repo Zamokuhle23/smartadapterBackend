@@ -294,6 +294,27 @@ class NextGrowsBankTests(TestCase):
         ):
             self.assertEqual(self._next_id(), self.q1.id)
 
+    def test_excluded_ids_are_never_served(self):
+        q2 = QuizQuestion.objects.create(
+            subject=self.subject,
+            format=QuizQuestion.Format.STRUCTURED,
+            question_text="Second bank question.",
+            marks=2,
+        )
+        # q1 attempted AND excluded; q2 untouched -> must serve q2, never q1.
+        response = self.client.get(
+            f"/api/quiz/next/?subject_id={self.subject.id}&exclude={self.q1.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], q2.id)
+
+    def test_all_excluded_returns_404_so_client_generates(self):
+        response = self.client.get(
+            f"/api/quiz/next/?subject_id={self.subject.id}&exclude={self.q1.id}"
+        )
+        # only q1 in bank and it is excluded -> 404, app then generates fresh.
+        self.assertEqual(response.status_code, 404)
+
 
 class NoAttemptGuardTests(TestCase):
     """Gibberish must earn 0 even if the grader hallucinates marks."""
