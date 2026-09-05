@@ -144,8 +144,8 @@ class QuestionAnchor(models.Model):
         ordering = ("document_id", "page_number", "qid")
         constraints = [
             models.UniqueConstraint(
-                fields=["document", "qid"],
-                name="unique_anchor_per_question",
+                fields=["document", "qid", "page_number"],
+                name="unique_anchor_per_question_page",
             )
         ]
 

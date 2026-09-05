@@ -60,7 +60,8 @@ class Command(BaseCommand):
 
     @staticmethod
     def _save(doc, qid, pno, top, bottom, width, kind, confidence) -> int:
-        if QuestionAnchor.objects.filter(document=doc, qid=qid).exists():
+        if QuestionAnchor.objects.filter(
+                document=doc, qid=qid, page_number=pno).exists():
             return 0
         QuestionAnchor.objects.create(
             document=doc, qid=qid, page_number=pno,
