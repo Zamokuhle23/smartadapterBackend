@@ -30,6 +30,12 @@ SYL_MARK = re.compile(
     r"the aims of the syllabus|scheme of assessment|% of teaching time|"
     r"assessment objectives|appendix \d",
     re.IGNORECASE)
+SYL_KINDS = re.compile(
+    r"all learners should be able to|the aims of the syllabus|"
+    r"scheme of assessment|% of teaching time|assessment objectives|"
+    r"appendix \d",
+    re.IGNORECASE)
+HAS_MARKS = re.compile(r"\[\d{1,2}\]|Fig\.|\[Total")
 Q_MARK = re.compile(
     r"\[\d{1,2}\]|\[Total|Fig\.|Turn over|CANDIDATE NUMBER|CENTRE NUMBER|"
     r"\.{10,}|_{10,}|2 hours|1 hour",
@@ -89,3 +95,50 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"{'Purged' if apply else 'Would purge'} {total_bad} anchors "
             f"({total_kept} kept)."))
+        self._retype_syllabus_only(apply)
+
+    def _retype_syllabus_only(self, apply: bool):
+        """Whole docs that are syllabus booklets, not papers.
+
+        A past-paper-typed doc with real extracted text (>2000 chars),
+        2+ syllabus marker kinds, and zero question markers anywhere
+        ([n]/Fig./Total) holds no answerable paper: retype to SYLLABUS
+        and drop its anchors/topics. Scanned (textless) docs are left
+        alone.
+        """
+        import pymupdf
+
+        from apps.quiz.models import PageTopic
+
+        docs = SyllabusDocument.objects.filter(
+            doc_type=SyllabusDocument.DocType.PAST_PAPER).order_by("id")
+        n = 0
+        for doc in docs:
+            try:
+                pdf = pymupdf.open(doc.file.path)
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                full = "\n".join(p.get_text("text") for p in pdf)
+            finally:
+                pdf.close()
+            if len(full.strip()) < 2000:
+                continue
+            kinds = set(m.group(0).lower()
+                        for m in SYL_KINDS.finditer(full))
+            if len(kinds) < 2 or HAS_MARKS.search(full):
+                continue
+            n += 1
+            na = QuestionAnchor.objects.filter(document=doc).count()
+            self.stdout.write(
+                f"  {'APPLY' if apply else 'PLAN'} retype {doc.id} "
+                f"{doc.title[:45]!r} -> syllabus "
+                f"(markers={sorted(kinds)[:4]}, anchors={na})")
+            if not apply:
+                continue
+            doc.doc_type = SyllabusDocument.DocType.SYLLABUS
+            doc.save(update_fields=["doc_type"])
+            QuestionAnchor.objects.filter(document=doc).delete()
+            PageTopic.objects.filter(document=doc).delete()
+        self.stdout.write(self.style.SUCCESS(
+            f"{'Retyped' if apply else 'Would retype'} {n} syllabus docs."))
