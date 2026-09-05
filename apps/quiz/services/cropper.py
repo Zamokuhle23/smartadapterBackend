@@ -12,7 +12,7 @@ flagged for QC. Nothing here needs OCR (tesseract) on digital PDFs.
 
 import re
 
-TOP_ANCHOR = re.compile(r"^\s*\*?(\d{1,2})(?:[\.\)]|\s{2,}|\s*$)")
+TOP_ANCHOR = re.compile(r"^\s*\*?(\d{1,2})(?:\)|\s{2,}|\s*$|\.(?!\d))")
 BARE_NUMBER = re.compile(r"^\s*\*?(\d{1,2})\s*$")
 EXERCISE_ANCHOR = re.compile(r"^\s*Exercise\s+(\d{1,2})\b", re.IGNORECASE)
 SISWATI_ANCHOR = re.compile(
