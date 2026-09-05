@@ -853,6 +853,54 @@ class TagPagesTests(TestCase):
         self.assertEqual(labels, ["Pythagoras theorem", "Quadratics"])
 
 
+class AnchorFeedTests(TestCase):
+    """Topic labels pick list + anchor feed with exclusion."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+        self.user = User.objects.create_user("anchorfeed", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        from apps.quiz.models import PageTopic, QuestionAnchor
+        from apps.syllabus.models import SyllabusDocument
+
+        self.PageTopic = PageTopic
+        doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP 2024",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE, year=2024, paper_number=2)
+        self.doc = doc
+        PageTopic.objects.create(document=doc, page_number=7,
+                                 label="Pythagoras theorem", confidence=0.9)
+        self.anchor = QuestionAnchor.objects.create(
+            document=doc, qid="4a", page_number=7,
+            bbox=[0.0, 100.0, 595.0, 400.0], kind="text", confidence=0.9)
+
+    def test_topics_list(self):
+        response = self.client.get(
+            f"/api/quiz/page-topics/?subject_id={self.subject.id}")
+        self.assertEqual(response.status_code, 200)
+        labels = [r["label"] for r in response.json()]
+        self.assertIn("Pythagoras theorem", labels)
+
+    def test_next_anchor_filtered_and_excluded(self):
+        from apps.quiz.models import QuestionAnchor
+
+        other = QuestionAnchor.objects.create(
+            document=self.doc, qid="5", page_number=9,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        self.PageTopic.objects.create(
+            document=self.doc, page_number=9, label="Quadratics",
+            confidence=0.9)
+        url = f"/api/quiz/anchors/next/?subject_id={self.subject.id}"
+        only_pyth = self.client.get(url + "&topics=Pythagoras theorem").json()
+        self.assertEqual(only_pyth["id"], self.anchor.id)
+        gone = self.client.get(
+            url + f"&exclude={self.anchor.id},{other.id}")
+        self.assertEqual(gone.status_code, 404)
+
+
 class GenerationRetryTests(TestCase):
     """An all-bare batch gets one strict retry before surfacing an error."""
 

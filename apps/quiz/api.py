@@ -8,7 +8,7 @@ from apps.progress.models import MasteryEvent, MasteryRecord
 from apps.progress.services.bkt import update_mastery
 from apps.syllabus.models import Enrollment, LearningObjective, Subject
 
-from .models import CropAttempt, ExamSession, PaperAttempt, QuestionAnchor, QuestionCrop, QuizAttempt, QuizQuestion
+from .models import CropAttempt, ExamSession, PageTopic, PaperAttempt, QuestionAnchor, QuestionCrop, QuizAttempt, QuizQuestion
 from .services.generator import (
     QuizGenerationError,
     extract_keys,
@@ -764,3 +764,93 @@ class PaperAnswerView(APIView):
             anchor.save(update_fields=["marks", "correct_index",
                                        "marking_guidance"])
             return
+
+
+# --------------------------------------------------------------------------
+# Practice sourcing from tagged pages: distinct labels + anchor feed.
+# --------------------------------------------------------------------------
+
+
+class PageTopicsView(APIView):
+    """GET ?subject_id=N -> distinct page labels (the practice pick-list)."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            subject = Subject.objects.get(pk=request.query_params.get("subject_id"))
+        except Subject.DoesNotExist:
+            return Response({"detail": "Unknown subject_id"}, status=400)
+        from django.db.models import Count
+
+        rows = list(PageTopic.objects.filter(
+            document__subject=subject,
+        ).values("label").annotate(pages=Count("id")).order_by("-pages"))
+        return Response([{"label": r["label"], "pages": r["pages"]}
+                         for r in rows])
+
+
+class NextAnchorView(APIView):
+    """GET ?subject_id=N&topics=a,b&exclude=1,2 -> one tappable anchor.
+
+    Topics match PageTopic labels (exact, case-insensitive). 404 when
+    nothing fresh remains (the app falls back to text questions).
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            subject = Subject.objects.get(pk=request.query_params.get("subject_id"))
+        except Subject.DoesNotExist:
+            return Response({"detail": "Unknown subject_id"}, status=400)
+        if Enrollment.objects.filter(student=request.user, subject=subject).first() is None:
+            return Response(
+                {"detail": "Enroll in this subject before practising"},
+                status=403,
+            )
+        topics = [t.strip() for t in
+                  (request.query_params.get("topics") or "").split(",")
+                  if t.strip()]
+        exclude_ids = _parse_id_list(request.query_params.getlist("exclude"))
+        qs = QuestionAnchor.objects.filter(document__subject=subject)
+        if topics:
+            from django.db.models import F as _F
+            from django.db.models import Q as _Q
+
+            label_q = _Q()
+            for label in topics:
+                # Same-join conditions: the label must sit on the anchor's
+                # own page, not merely somewhere in the document.
+                label_q |= _Q(
+                    document__page_topics__label__iexact=label,
+                    document__page_topics__page_number=_F("page_number"),
+                )
+            qs = qs.filter(label_q)
+        if exclude_ids:
+            qs = qs.exclude(id__in=list(exclude_ids))
+        anchor = qs.order_by("?").first()
+        if anchor is None:
+            return Response({"detail": "no_questions"}, status=404)
+        doc = anchor.document
+        return Response({
+            "id": anchor.id,
+            "doc_id": doc.id,
+            "qid": anchor.qid,
+            "page_number": anchor.page_number,
+            "bbox": anchor.bbox,
+            "kind": anchor.kind,
+            "label": _anchor_label(anchor),
+            "pdf_url": (request.build_absolute_uri(doc.file.url)
+                        if doc.file else None),
+            "paper_label": (f"Paper {doc.paper_number}"
+                            if doc.paper_number else "Past paper"),
+            "source_year": doc.year,
+            "source": doc.source,
+        })
+
+
+def _anchor_label(anchor) -> str:
+    topic = PageTopic.objects.filter(
+        document=anchor.document, page_number=anchor.page_number).first()
+    return topic.label if topic else ""
