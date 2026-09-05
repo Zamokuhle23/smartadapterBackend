@@ -917,7 +917,13 @@ class PracticePagesView(APIView):
                 label_q |= _Q(document__page_topics__label__iexact=label,
                               document__page_topics__page_number=_F("page_number"))
             pages = pages.filter(label_q)
-        rows = list(pages.order_by("?")[:limit])
+        # DISTINCT can duplicate pairs when the anchor join fans out
+        # (one row per anchor qid), so over-fetch and dedupe pairs here.
+        rows = list(pages.order_by("?")[:limit * 5])
+        seen = {}
+        for r in rows:
+            seen.setdefault((r["document_id"], r["page_number"]), r)
+        rows = list(seen.values())[:limit]
         if not rows:
             return Response({"detail": "no_questions"}, status=404)
         docs = {d.id: d for d in SyllabusDocument.objects.filter(
