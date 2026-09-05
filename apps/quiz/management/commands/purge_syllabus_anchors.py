@@ -26,9 +26,9 @@ from apps.quiz.services.cropper import anchor_text
 from apps.syllabus.models import SyllabusDocument
 
 SYL_MARK = re.compile(
-    r"all learners should be able to|the aims of the syllabus|"
-    r"scheme of assessment|% of teaching time|assessment objectives|"
-    r"appendix \d|(?m)^\s*\d{1,2}\.\d{1,2}\s+\S",
+    r"(?m)^\s*\d{1,2}\.\d{1,2}\s+\S|all learners should be able to|"
+    r"the aims of the syllabus|scheme of assessment|% of teaching time|"
+    r"assessment objectives|appendix \d",
     re.IGNORECASE)
 Q_MARK = re.compile(
     r"\[\d{1,2}\]|\[Total|Fig\.|Turn over|CANDIDATE NUMBER|CENTRE NUMBER|"
