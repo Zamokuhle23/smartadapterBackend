@@ -12,10 +12,15 @@ flagged for QC. Nothing here needs OCR (tesseract) on digital PDFs.
 
 import re
 
-TOP_ANCHOR = re.compile(r"^\s*(\d{1,2})(?:[\.\)]|\s{2,}|\s*$)")
+TOP_ANCHOR = re.compile(r"^\s*\*?(\d{1,2})(?:[\.\)]|\s{2,}|\s*$)")
+BARE_NUMBER = re.compile(r"^\s*\*?(\d{1,2})\s*$")
+EXERCISE_ANCHOR = re.compile(r"^\s*Exercise\s+(\d{1,2})\b", re.IGNORECASE)
+SISWATI_ANCHOR = re.compile(
+    r"^\s*(?:Umsebenti|Sigaba)\s+(\d{1,2})\b", re.IGNORECASE)
+SECTION_ANCHOR = re.compile(r"^\s*([A-Z])(\d{1,2})\b")
 LOOSE_ANCHOR = re.compile(r"^\s*(\d{1,2})\s+\S")
 SUB_ANCHOR = re.compile(r"^\s*\(?([a-z]|[ivx]+|[0-9]+)\)")
-FOOTER = re.compile(r"©|specimen|turn over|^\s*page\s*\d+", re.IGNORECASE)
+FOOTER = re.compile("\u00a9|specimen|turn over|^\s*page\s*\d+", re.IGNORECASE)
 MARGIN_WORDS = re.compile(r"margin|do not write", re.IGNORECASE)
 SUB_ANCHOR = re.compile(r"^\s*(\(?[a-z]\)|\(?[ivx]+\)|\([0-9]+\))")
 
@@ -52,20 +57,41 @@ def page_lines(page):
     return out
 
 
-def detect_anchors(lines, page_width: float, expected=None):
+def detect_anchors(lines, page_width: float, expected=None, sec_expected=None,
+                   page_height: float = 0.0):
     """Top-level question starts: number + (bold|large) + left zone + sequence.
 
     expected threads across pages so numbering stays strictly sequential;
-    returns (anchors, expected).
+    sec_expected tracks per-letter section series ("A1", "B4") the same way.
+    returns (anchors, expected, sec_expected).
     """
     counts = {}
     for ln in lines:
         counts[ln["size"]] = counts.get(ln["size"], 0) + 1
     body_size = max(counts, key=lambda s: counts[s]) if counts else 10.0
+    if sec_expected is None:
+        sec_expected = {}
     anchors = []
+
+    def _accept(number, top, x0, confident):
+        anchors.append({"number": number, "top": top, "x0": x0,
+                        "confident": confident})
+
     for ln in lines:
         m = TOP_ANCHOR.match(ln["text"])
         loose = False
+        prefix = ""
+        if not m:
+            # SiSwati papers number tasks "Umsebenti 1" / "Sigaba 1".
+            m = SISWATI_ANCHOR.match(ln["text"])
+        if not m:
+            # English papers group sub-parts under "Exercise 1..3".
+            m = EXERCISE_ANCHOR.match(ln["text"])
+        if not m:
+            # Section-style numbering ("A1", "B4" in D&T papers).
+            m = SECTION_ANCHOR.match(ln["text"])
+            if m:
+                prefix = m.group(1)
         if not m:
             # Single-space variant ("8 The function..."): only with bold,
             # left and exact sequence (kills "6 cm" false positives).
@@ -73,31 +99,52 @@ def detect_anchors(lines, page_width: float, expected=None):
             loose = True
         if not m:
             continue
-        num = int(m.group(1))
+        if prefix:
+            num = int(m.group(2))
+            number = f"{prefix}{num}"
+            exp = sec_expected.get(prefix)
+        else:
+            num = int(m.group(1))
+            number = str(num)
+            exp = expected
         strong = ln["bold"] or ln["size"] >= body_size * 1.08
         left = ln["x0"] < page_width * 0.35
         if not left:
             continue
-        if expected is None:
-            if left and ln["size"] >= body_size * 0.99 and not loose:
-                # First anchor: strict shape + body size (Cambridge numbers
-                # are not bold).
-                anchors.append({"number": str(num), "top": ln["top"],
-                                "x0": ln["x0"], "confident": ln["bold"]})
+        if exp is None:
+            if ln["size"] >= body_size * 0.99 and not loose:
+                # First anchor: strict shape + body size.
+                _accept(number, ln["top"], ln["x0"], ln["bold"])
+                if prefix:
+                    sec_expected[prefix] = num + 1
+                else:
+                    expected = num + 1
+            elif not loose and not prefix and \
+                    BARE_NUMBER.match(ln["text"]) and \
+                    ln["size"] >= body_size * 0.95 and (
+                        not page_height
+                        or page_height * 0.1 < ln["top"] < page_height * 0.92):
+                # Bare number ("2", "*1" in History/Literature papers set a
+                # touch smaller than body): safe seed — "6 cm" style lines
+                # always carry trailing text, folios sit outside the band.
+                _accept(number, ln["top"], ln["x0"], ln["bold"] or True)
                 expected = num + 1
-        elif num == expected and (strong or not loose):
-            anchors.append({"number": str(num), "top": ln["top"],
-                            "x0": ln["x0"],
-                            "confident": strong and not loose})
-            expected = num + 1
-        elif (strong and not loose and expected is not None
-                and expected < num <= expected + 3):
+        elif num == exp and (strong or not loose):
+            _accept(number, ln["top"], ln["x0"], strong and not loose)
+            if prefix:
+                sec_expected[prefix] = num + 1
+            else:
+                expected = num + 1
+        elif (strong and not loose and exp is not None
+                and exp < num <= exp + 3):
             # Papers occasionally skip a number: follow with low confidence
             # so one gap does not swallow the rest of the paper.
-            anchors.append({"number": str(num), "top": ln["top"],
-                            "x0": ln["x0"], "confident": False})
-            expected = num + 1
-    return anchors, expected
+            _accept(number, ln["top"], ln["x0"], False)
+            if prefix:
+                sec_expected[prefix] = num + 1
+            else:
+                expected = num + 1
+    return anchors, expected, sec_expected
 
 
 def detect_questions(doc):
@@ -105,13 +152,16 @@ def detect_questions(doc):
     questions = []
     open_q = None
     expected = None
+    sec_expected = None
     page_lines_cache = {}
     for page in doc:
         pno = page.number + 1
         height = float(page.rect.height)
         lines = page_lines(page)
         page_lines_cache[pno] = lines
-        anchors, expected = detect_anchors(lines, page.rect.width, expected)
+        anchors, expected, sec_expected = detect_anchors(
+            lines, page.rect.width, expected, sec_expected,
+            float(page.rect.height))
         if open_q is not None:
             if anchors:
                 # Previous question spills onto this page: close it here.
