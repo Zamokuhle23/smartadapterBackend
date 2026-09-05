@@ -386,6 +386,47 @@ class GroundingTests(TestCase):
         self.assertIn("PP-TEXT", prompts[0])
         self.assertNotIn("MS-TEXT", prompts[0])
 
+    def test_figured_page_outside_top6_still_forces_diagrams(self):
+        from unittest.mock import patch
+
+        from apps.quiz.services.generator import generate_questions
+        from apps.rag.models import DocumentChunk, DocumentFigure
+        from apps.syllabus.models import SyllabusDocument
+        from django.core.files.base import ContentFile
+
+        plain_doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP plain",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE)
+        plains = [DocumentChunk(syllabus=self.syllabus, document=plain_doc,
+                                subject=self.subject, ordinal=i,
+                                page_number=9, text=f"plain {i}")
+                  for i in range(6)]
+        fig_doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP figs",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE)
+        fig = DocumentFigure(document=fig_doc, page_number=3, ordinal=0)
+        fig.image.save("g.png", ContentFile(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50),
+                       save=True)
+        figured = DocumentChunk(syllabus=self.syllabus, document=fig_doc,
+                                subject=self.subject, ordinal=6,
+                                page_number=3, text="triangle diagram labels")
+        prompts = []
+
+        class CapProvider:
+            def chat(self, messages):
+                prompts.append(messages[-1]["content"])
+                return FAKE_LLM_JSON
+
+        with patch("apps.rag.services.llm.get_chat_provider",
+                   return_value=CapProvider()), patch(
+            "apps.quiz.services.generator.retrieve",
+            return_value=plains + [figured],
+        ):
+            generate_questions(self.subject, count=1)
+        self.assertIn("WILL be shown", prompts[0])
+
 
 class GenerationRetryTests(TestCase):
     """An all-bare batch gets one strict retry before surfacing an error."""

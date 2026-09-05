@@ -409,6 +409,9 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
     preferred = _preferred_source(pp_sources)
     chunks = _prioritise_past_papers(raw_chunks, k=6, preferred_source=preferred)
     context = _build_context(chunks) if chunks else "(no indexed corpus)"
+    # Figure attach + prompt line use the WIDE set: the top-6 text context
+    # rarely holds the figured pages, starving _attach_figures.
+    wide_chunks = raw_chunks[:16]
     difficulty = difficulty or 2
     source_instruction = _source_instruction(preferred) if preferred else (
         "Adapt whichever past-paper chunk fits; set \"source\" to \"igcse\" or \"egcse\"."
@@ -437,7 +440,7 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
         objective_line=objective_line,
         style_line="",
         source_instruction=source_instruction,
-        figure_line=_figure_prompt_line(chunks),
+        figure_line=_figure_prompt_line(wide_chunks),
     )
     system = {"role": "system", "content": "You write syllabus-accurate exam questions. Output ONLY valid JSON."}
     raw = _chat([system, {"role": "user", "content": prompt}])
@@ -450,7 +453,8 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
         made = []
         for idx, item in enumerate(_extract_json_array(raw_text)):
             pin = pins[idx % len(pins)] if pins else None
-            q = _question_from_item(subject, item, pin, chunks, default_difficulty=difficulty)
+            q = _question_from_item(subject, item, pin, wide_chunks,
+                                    default_difficulty=difficulty)
             if q is not None:
                 made.append(q)
         return made
@@ -937,14 +941,15 @@ def next_exam_question(session: ExamSession) -> QuizQuestion | None:
 
     entry = queue[index]
     fmt = entry.get("format", QuizQuestion.Format.STRUCTURED)
-    context_chunks = retrieve(
+    exam_wide = retrieve(
         session.subject.syllabus,
         f"{session.subject.name} {entry['topic']} exam questions",
-        k=4,
+        k=8,
         subject=session.subject,
     )
-    context_chunks = _past_paper_chunks(context_chunks)
-    context_chunks = _filter_chunks_by_tier(context_chunks, session.plan.get("tier", ""))
+    exam_wide = _past_paper_chunks(exam_wide)
+    exam_wide = _filter_chunks_by_tier(exam_wide, session.plan.get("tier", ""))
+    context_chunks = _prioritise_past_papers(exam_wide, k=4)
     prompt = EXAM_QUESTION_PROMPT.format(
         level=session.subject.syllabus.get_level_display(),
         subject_name=session.subject.name,
@@ -965,7 +970,7 @@ def next_exam_question(session: ExamSession) -> QuizQuestion | None:
             else "This paper uses STRUCTURED questions - include all parts and realistic marks."
         ),
         context=_build_context(context_chunks)[:4000] or "(no indexed corpus)",
-        figure_line=_figure_prompt_line(context_chunks),
+        figure_line=_figure_prompt_line(exam_wide),
     )
     raw = _chat(
         [
@@ -977,7 +982,7 @@ def next_exam_question(session: ExamSession) -> QuizQuestion | None:
     item = _extract_json_object(raw)
     item["format"] = fmt  # blueprint wins over model drift
     question = _question_from_item(
-        session.subject, item, None, context_chunks,
+        session.subject, item, None, exam_wide,
         force_paper_label=f"Paper {session.paper_number}",
     )
     if question is None:
