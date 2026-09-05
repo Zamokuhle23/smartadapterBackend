@@ -772,9 +772,17 @@ class PaperAnswerView(APIView):
 
 
 class PageTopicsView(APIView):
-    """GET ?subject_id=N -> distinct page labels (the practice pick-list)."""
+    """GET ?subject_id=N -> distinct page labels (the practice pick-list).
+
+    Normalised: case-insensitive dedupe (most common casing wins) and
+    non-content labels (blank pages, instructions, formula sheets,
+    working space) excluded.
+    """
 
     permission_classes = [permissions.IsAuthenticated]
+
+    JUNK_LABELS = ("blank", "instruction", "working space", "formula",
+                   "calculator")
 
     def get(self, request):
         try:
@@ -786,8 +794,15 @@ class PageTopicsView(APIView):
         rows = list(PageTopic.objects.filter(
             document__subject=subject,
         ).values("label").annotate(pages=Count("id")).order_by("-pages"))
-        return Response([{"label": r["label"], "pages": r["pages"]}
-                         for r in rows])
+        grouped = {}
+        for row in rows:
+            key = (row["label"] or "").strip().lower()
+            if not key or any(j in key for j in self.JUNK_LABELS):
+                continue
+            if key not in grouped:
+                grouped[key] = {"label": row["label"].strip(), "pages": 0}
+            grouped[key]["pages"] += row["pages"]
+        return Response(sorted(grouped.values(), key=lambda r: -r["pages"]))
 
 
 class NextAnchorView(APIView):
