@@ -458,6 +458,53 @@ class CropperTests(TestCase):
         self.assertEqual([q["number"] for q in qs], ["1", "2"])
         self.assertTrue(all(q["confident"] for q in qs))
 
+    def test_detect_sub_parts_and_kinds(self):
+        import pymupdf
+
+        from apps.quiz.services.cropper import (
+            detect_parts, detect_questions, part_kind)
+
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 100), "4  Parts follow.", fontname="hebo",
+                         fontsize=12)
+        page.insert_text((72, 150), "(a) Solve 2x + 5 = 15.", fontname="hebo",
+                         fontsize=11)
+        page.insert_text((72, 400), "(b) Draw the graph.", fontname="hebo",
+                         fontsize=11)
+        page.draw_line(pymupdf.Point(100, 420), pymupdf.Point(300, 420))
+        page.draw_line(pymupdf.Point(100, 420), pymupdf.Point(100, 600))
+        page.draw_line(pymupdf.Point(100, 600), pymupdf.Point(300, 600))
+        page.draw_line(pymupdf.Point(300, 600), pymupdf.Point(300, 420))
+        qs = detect_questions(doc)
+        self.assertEqual([q["number"] for q in qs], ["4"])
+        top, bottom = qs[0]["pages"][0][1], qs[0]["pages"][0][2]
+        parts = detect_parts(page, top, bottom)
+        self.assertEqual([p[0] for p in parts], ["a", "b"])
+        self.assertEqual(part_kind(page, top, parts[0][1]), "text")
+        self.assertEqual(part_kind(page, parts[1][1], bottom), "drawing")
+
+    def test_redact_zones_catch_barcode_and_marginalia(self):
+        import pymupdf
+
+        from apps.quiz.services.cropper import redact_zones
+
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 400), "4  Real question here.", fontname="hebo",
+                         fontsize=12)
+        # Barcode-like cluster: thin vertical rules.
+        for i in range(12):
+            x = 500 + i * 3
+            page.draw_line(pymupdf.Point(x, 60), pymupdf.Point(x, 140))
+        # Marginalia strip.
+        page.insert_text((10, 400), "DO NOT WRITE IN THIS MARGIN",
+                         fontsize=8)
+        zones = redact_zones(page)
+        self.assertTrue(len(zones) >= 2)
+        flat = [c for z in zones for c in z]
+        self.assertTrue(any(c > 490 for c in flat))
+
     def test_crop_paper_command(self):
         import shutil
         import tempfile
@@ -489,6 +536,47 @@ class CropperTests(TestCase):
                 call_command("crop_paper", "--doc-id", str(doc.id))
                 self.assertEqual(
                     QuestionCrop.objects.filter(document=doc).count(), 2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_anchor_paper_command_and_api(self):
+        import shutil
+        import tempfile
+
+        from django.core.files.base import ContentFile
+        from django.core.management import call_command
+        from django.test import override_settings
+
+        from apps.quiz.models import QuestionAnchor
+        from apps.syllabus.models import SyllabusDocument
+        from apps.syllabus.models import Enrollment
+
+        tmp = tempfile.mkdtemp()
+        try:
+            with override_settings(MEDIA_ROOT=tmp):
+                doc = SyllabusDocument(
+                    syllabus=self.syllabus, subject=self.subject,
+                    title="Maths P2 2024", source="egcse", year=2024,
+                    paper_number=2)
+                doc.file.save("q.pdf", ContentFile(self._two_question_pdf()),
+                              save=True)
+                call_command("anchor_paper", "--doc-id", str(doc.id))
+                anchors = list(QuestionAnchor.objects.filter(
+                    document=doc).order_by("qid"))
+                self.assertEqual([a.qid for a in anchors], ["1", "2"])
+                self.assertTrue(all(a.bbox[3] > a.bbox[1] for a in anchors))
+                user = User.objects.create_user("anchorviewer",
+                                                password="test-pass-123")
+                Enrollment.objects.create(student=user, subject=self.subject)
+                client = APIClient()
+                client.force_authenticate(user)
+                response = client.get(f"/api/quiz/paper/{doc.id}/anchors/")
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertIn("pages", body)
+                flat = [q["qid"] for p in body["pages"].values()
+                        for q in p["questions"]]
+                self.assertEqual(sorted(flat), ["1", "2"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

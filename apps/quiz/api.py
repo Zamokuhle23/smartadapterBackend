@@ -8,7 +8,7 @@ from apps.progress.models import MasteryEvent, MasteryRecord
 from apps.progress.services.bkt import update_mastery
 from apps.syllabus.models import Enrollment, LearningObjective, Subject
 
-from .models import CropAttempt, ExamSession, QuestionCrop, QuizAttempt, QuizQuestion
+from .models import CropAttempt, ExamSession, QuestionAnchor, QuestionCrop, QuizAttempt, QuizQuestion
 from .services.generator import (
     QuizGenerationError,
     generate_questions,
@@ -397,7 +397,6 @@ class ExamNextView(APIView):
 # Past-paper crops: exact scanned questions (text + diagram + table as one).
 # --------------------------------------------------------------------------
 
-
 class CropPublicSerializer(serializers.ModelSerializer):
     """A crop serialises like a question so the app reuses its UI.
 
@@ -565,3 +564,56 @@ class CropAnswerView(APIView):
                 "feedback": feedback,
             }
         )
+
+
+# --------------------------------------------------------------------------
+# Interactive paper: page anchors + redact zones for the annotation layer.
+# --------------------------------------------------------------------------
+
+
+class PaperAnchorsView(APIView):
+    """GET /api/quiz/paper/<doc_id>/anchors/ -> page geometry for the app.
+
+    The app renders the original PDF itself, paints the redact zones over
+    (barcodes, marginalia, admin furniture) and opens the answer overlay at
+    tapped anchor bboxes. All bboxes are PDF points; multiply by the render
+    zoom for screen pixels.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, doc_id):
+        from apps.quiz.services.cropper import redact_zones
+        from apps.syllabus.models import SyllabusDocument
+
+        try:
+            doc = SyllabusDocument.objects.select_related("subject").get(
+                pk=doc_id)
+        except SyllabusDocument.DoesNotExist:
+            return Response({"detail": "Unknown document"}, status=404)
+        import pymupdf
+
+        try:
+            pdf = pymupdf.open(doc.file.path)
+        except Exception:  # noqa: BLE001
+            return Response({"detail": "Paper file unavailable"}, status=404)
+        anchors = list(QuestionAnchor.objects.filter(
+            document=doc).order_by("page_number", "qid").values(
+            "qid", "page_number", "bbox", "kind", "confidence", "status"))
+        pages = {}
+        with pdf:
+            for page in pdf:
+                pno = page.number + 1
+                pages[pno] = {
+                    "width": float(page.rect.width),
+                    "height": float(page.rect.height),
+                    "questions": [a for a in anchors
+                                  if a["page_number"] == pno],
+                    "redact": redact_zones(page),
+                }
+        return Response({
+            "document": doc.id,
+            "title": doc.title,
+            "subject": doc.subject.code if doc.subject else None,
+            "pages": pages,
+        })

@@ -14,7 +14,9 @@ import re
 
 TOP_ANCHOR = re.compile(r"^\s*(\d{1,2})(?:[\.\)]|\s{2,}|\s*$)")
 LOOSE_ANCHOR = re.compile(r"^\s*(\d{1,2})\s+\S")
+SUB_ANCHOR = re.compile(r"^\s*\(?([a-z]|[ivx]+|[0-9]+)\)")
 FOOTER = re.compile(r"©|specimen|turn over|^\s*page\s*\d+", re.IGNORECASE)
+MARGIN_WORDS = re.compile(r"margin|do not write", re.IGNORECASE)
 SUB_ANCHOR = re.compile(r"^\s*(\(?[a-z]\)|\(?[ivx]+\)|\([0-9]+\))")
 
 
@@ -191,3 +193,103 @@ def crop_question(page_images, question, zoom: float):
         img.crop(box).save(buf, format="PNG")
         out.append(buf.getvalue())
     return out
+
+
+def _norm_suffix(raw: str) -> str:
+    return raw.strip().strip("()")
+
+
+def detect_parts(page, top: float, bottom: float):
+    """Sub-anchors ((a), (b), (i)...) inside one question region.
+
+    Returns [(suffix, top)] in reading order; empty when the question has
+    no lettered parts (it stays a single tappable anchor).
+    """
+    lines = [ln for ln in page_lines(page)
+             if top <= ln["top"] < bottom and ln["text"].strip()]
+    width = page.rect.width
+    parts = []
+    for ln in lines:
+        m = SUB_ANCHOR.match(ln["text"])
+        if not m or ln["x0"] > width * 0.4:
+            continue
+        parts.append((_norm_suffix(m.group(1)), ln["top"]))
+    return parts
+
+
+def part_kind(page, top: float, bottom: float) -> str:
+    """drawing when the region holds real vector work, else text."""
+    import pymupdf
+
+    box = pymupdf.Rect(0, top, page.rect.width, bottom)
+    hits = 0
+    for d in page.get_drawings():
+        r = d.get("rect")
+        if r is None:
+            continue
+        f = pymupdf.Rect(r)
+        f = pymupdf.Rect(f.x0 - 1, f.y0 - 1, f.x1 + 1, f.y1 + 1)
+        if not (f.x1 < box.x0 or box.x1 < f.x0 or
+                f.y1 < box.y0 or box.y1 < f.y0):
+            hits += 1
+            if hits >= 4:
+                return "drawing"
+    return "text"
+
+
+def redact_zones(page):
+    """Page regions to hide when displaying: headers/footers with admin
+    furniture, barcode clusters, marginalia strips. Returned as PDF-point
+    rects; the app paints them over so barcodes never show."""
+    import pymupdf
+
+    zones = []
+    W, H = page.rect.width, page.rect.height
+    words = page.get_text("words")
+
+    def band_text(top, bottom):
+        return " ".join(
+            w[4] for w in words if w[1] >= top and w[3] <= bottom).lower()
+
+    for top, bottom in ((0.0, H * 0.08), (H * 0.92, H)):
+        joined = band_text(top, bottom)
+        if any(k in joined for k in (
+                "examiner", "candidate", "centre number", "signature",
+                "examinations council", "specimen", "turn over", "©")):
+            zones.append([0.0, top, float(W), float(bottom)])
+
+    # Barcode clusters: many thin vertical rules in a narrow band.
+    verticals = []
+    for d in page.get_drawings():
+        r = d.get("rect")
+        if r is None:
+            continue
+        r = pymupdf.Rect(r)
+        if r.width < 3 and r.height > 20:
+            verticals.append(r)
+    verticals.sort(key=lambda r: r.x0)
+    run = []
+    for r in verticals:
+        if run and r.x0 - run[-1].x1 > 60:
+            if len(run) >= 10:
+                zones.append([run[0].x0 - 4, min(v.y0 for v in run),
+                              run[-1].x1 + 4, max(v.y1 for v in run)])
+            run = []
+        run.append(r)
+    if len(run) >= 10:
+        zones.append([run[0].x0 - 4, min(v.y0 for v in run),
+                      run[-1].x1 + 4, max(v.y1 for v in run)])
+
+    # Marginalia strips (rotated "do not write" text zones).
+    boxes = []
+    for w in words:
+        if MARGIN_WORDS.search(w[4]):
+            boxes.append(pymupdf.Rect(w[0], w[1], w[2], w[3]))
+    if boxes:
+        x0 = min(b.x0 for b in boxes) - 8
+        x1 = max(b.x1 for b in boxes) + 8
+        y0 = min(b.y0 for b in boxes) - 8
+        y1 = max(b.y1 for b in boxes) + 8
+        zones.append([max(0.0, x0), max(0.0, y0),
+                      min(float(W), x1), min(float(H), y1)])
+    return zones

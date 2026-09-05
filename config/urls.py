@@ -15,6 +15,7 @@ from apps.quiz.api import (
     GenerateQuizView,
     NextCropView,
     NextQuestionView,
+    PaperAnchorsView,
     StartExamView,
 )
 from apps.syllabus.api import (
@@ -55,6 +56,8 @@ urlpatterns = [
     path("api/quiz/answer/", AnswerQuizView.as_view(), name="quiz-answer"),
     path("api/quiz/crop/next/", NextCropView.as_view(), name="crop-next"),
     path("api/quiz/crop/answer/", CropAnswerView.as_view(), name="crop-answer"),
+    path("api/quiz/paper/<int:doc_id>/anchors/", PaperAnchorsView.as_view(),
+         name="paper-anchors"),
     path("api/quiz/exam/start/", StartExamView.as_view(), name="exam-start"),
     path("api/quiz/exam/<int:pk>/", ExamStateView.as_view(), name="exam-state"),
     path("api/quiz/exam/<int:pk>/next/", ExamNextView.as_view(), name="exam-next"),

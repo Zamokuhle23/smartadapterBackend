@@ -116,6 +116,43 @@ class QuestionCropImage(models.Model):
         ordering = ("sort",)
 
 
+class QuestionAnchor(models.Model):
+    """A tappable interaction point on an original paper page: a question or
+    a lettered part ((a), (b)...). The app renders the page (minus redact
+    zones) and opens the answer overlay at the anchor's bbox.
+
+    Kinds: text (keyboard) vs drawing (pen canvas). Confidence below ~0.7
+    lands in NEEDS_QC for review.
+    """
+
+    class Status(models.TextChoices):
+        AUTO = "auto", "Automatic"
+        NEEDS_QC = "needs_qc", "Needs review"
+        APPROVED = "approved", "Approved"
+
+    document = models.ForeignKey(
+        SyllabusDocument, on_delete=models.CASCADE, related_name="anchors")
+    qid = models.CharField(max_length=10)  # "4", "4a", "4b"
+    page_number = models.PositiveSmallIntegerField()
+    bbox = models.JSONField(default=list)  # [x0, y0, x1, y1] in PDF points
+    kind = models.CharField(max_length=10, default="text")
+    confidence = models.FloatField(default=0.0)
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.AUTO)
+
+    class Meta:
+        ordering = ("document_id", "page_number", "qid")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["document", "qid"],
+                name="unique_anchor_per_question",
+            )
+        ]
+
+    def __str__(self):
+        return f"Anchor<{self.document_id} {self.qid} p{self.page_number}>"
+
+
 class CropAttempt(models.Model):
     """A student's attempt at a cropped past-paper question (history only;
     crop answers don't feed the BKT mastery model)."""
