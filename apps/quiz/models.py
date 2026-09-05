@@ -52,6 +52,66 @@ class QuizQuestion(models.Model):
         return f"Q<{self.subject.code} d{self.difficulty} {self.get_format_display()}> {self.question_text[:60]}"
 
 
+def question_crop_upload_to(instance, filename: str) -> str:
+    key = (instance.crop.stable_key or "unkeyed") if instance.crop_id else "unkeyed"
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in key)[:100]
+    return f"question_crops/{safe}-p{instance.page_number}.png"
+
+
+class QuestionCrop(models.Model):
+    """A whole question cropped from its source paper: text, diagram, table
+    and all sub-parts together, exactly as printed.
+
+    Lazy cache per the crop design: created on first request, reused forever.
+    Crops never vary numbers (unlike LLM variations); grading keys come from
+    the mark scheme (filled later, NULL until then).
+    """
+
+    class Status(models.TextChoices):
+        AUTO = "auto", "Automatic"
+        NEEDS_QC = "needs_qc", "Needs review"
+        APPROVED = "approved", "Approved"
+
+    document = models.ForeignKey(
+        SyllabusDocument, on_delete=models.CASCADE, related_name="question_crops")
+    q_number = models.CharField(max_length=10)  # "6"
+    stable_key = models.CharField(max_length=140, unique=True, blank=True, default="")
+    pages = models.JSONField(default=list)  # [{page, top, bottom}] in PDF points
+    ocr_text = models.TextField(blank=True)
+    confidence = models.FloatField(default=0.0)
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.AUTO)
+    # Grading linkage (from the mark scheme crop; NULL until resolved).
+    correct_index = models.PositiveSmallIntegerField(null=True, blank=True)
+    marking_guidance = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("document_id", "q_number")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["document", "q_number"],
+                name="unique_crop_per_question",
+            )
+        ]
+
+    def __str__(self):
+        return self.stable_key or f"Crop<doc={self.document_id} Q{self.q_number}>"
+
+
+class QuestionCropImage(models.Model):
+    """One page-slice of a (possibly multi-page) question crop."""
+
+    crop = models.ForeignKey(
+        QuestionCrop, on_delete=models.CASCADE, related_name="images")
+    page_number = models.PositiveSmallIntegerField()
+    sort = models.PositiveSmallIntegerField(default=0)
+    image = models.ImageField(upload_to=question_crop_upload_to)
+
+    class Meta:
+        ordering = ("sort",)
+
+
 class ExamBlueprint(models.Model):
     """
     Cached exam structure for one subject + paper: topic weightings, question

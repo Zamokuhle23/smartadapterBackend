@@ -57,3 +57,20 @@ def figure_key_for(document, page, ordinal) -> str:
         page=page,
         ordinal=ordinal,
     )
+
+
+def crop_key_for(document, q_number: str) -> str:
+    """Key for one cropped question, e.g. IGCSE-0580-2024-MJ-P1-Q6."""
+    subject = getattr(document, "subject", None)
+    parts = [(getattr(document, "source", "") or "").upper() or "UNK",
+             str(getattr(subject, "code", None) or "UNK")]
+    if getattr(document, "year", None):
+        parts.append(str(document.year))
+    session = getattr(document, "session", "") or parse_session(
+        getattr(document, "title", ""))
+    if session:
+        parts.append(session)
+    if getattr(document, "paper_number", None):
+        parts.append(f"P{document.paper_number}")
+    parts.append(f"Q{q_number}")
+    return "-".join(parts)

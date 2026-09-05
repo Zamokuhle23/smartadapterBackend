@@ -428,6 +428,71 @@ class GroundingTests(TestCase):
         self.assertIn("WILL be shown", prompts[0])
 
 
+class CropperTests(TestCase):
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+
+    @staticmethod
+    def _two_question_pdf():
+        import pymupdf
+
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 100), "1  What is 2 + 2?", fontname="hebo",
+                         fontsize=12)
+        page.insert_text((72, 130), "Show your working.", fontname="helv",
+                         fontsize=11)
+        page.insert_text((72, 400), "2  What is 3 + 3?", fontname="hebo",
+                         fontsize=12)
+        page.insert_text((72, 430), "Show your working.", fontname="helv",
+                         fontsize=11)
+        return doc.tobytes()
+
+    def test_detect_two_questions(self):
+        import pymupdf
+
+        from apps.quiz.services.cropper import detect_questions
+
+        doc = pymupdf.open(stream=self._two_question_pdf(), filetype="pdf")
+        qs = detect_questions(doc)
+        self.assertEqual([q["number"] for q in qs], ["1", "2"])
+        self.assertTrue(all(q["confident"] for q in qs))
+
+    def test_crop_paper_command(self):
+        import shutil
+        import tempfile
+
+        from django.core.files.base import ContentFile
+        from django.core.management import call_command
+        from django.test import override_settings
+
+        from apps.quiz.models import QuestionCrop
+        from apps.syllabus.models import SyllabusDocument
+
+        tmp = tempfile.mkdtemp()
+        try:
+            with override_settings(MEDIA_ROOT=tmp):
+                doc = SyllabusDocument(
+                    syllabus=self.syllabus, subject=self.subject,
+                    title="Maths P2 2024", source="egcse", year=2024,
+                    paper_number=2)
+                doc.file.save("q.pdf", ContentFile(self._two_question_pdf()),
+                              save=True)
+                call_command("crop_paper", "--doc-id", str(doc.id))
+                crops = list(QuestionCrop.objects.filter(
+                    document=doc).order_by("q_number"))
+                self.assertEqual([c.q_number for c in crops], ["1", "2"])
+                self.assertTrue(all(c.images.count() == 1 for c in crops))
+                self.assertIn("2 + 2", crops[0].ocr_text)
+                self.assertTrue(crops[0].stable_key.startswith(
+                    "EGCSE-6880-2024-P2-Q"))
+                call_command("crop_paper", "--doc-id", str(doc.id))
+                self.assertEqual(
+                    QuestionCrop.objects.filter(document=doc).count(), 2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class GenerationRetryTests(TestCase):
     """An all-bare batch gets one strict retry before surfacing an error."""
 
