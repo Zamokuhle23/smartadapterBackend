@@ -833,6 +833,7 @@ class NextAnchorView(APIView):
         if anchor is None:
             return Response({"detail": "no_questions"}, status=404)
         doc = anchor.document
+        is_mcq = anchor.correct_index is not None
         return Response({
             "id": anchor.id,
             "doc_id": doc.id,
@@ -840,6 +841,8 @@ class NextAnchorView(APIView):
             "page_number": anchor.page_number,
             "bbox": anchor.bbox,
             "kind": anchor.kind,
+            "format": "mcq" if is_mcq else "structured",
+            "marks": anchor.marks or 2,
             "label": _anchor_label(anchor),
             "pdf_url": (request.build_absolute_uri(doc.file.url)
                         if doc.file else None),

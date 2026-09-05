@@ -896,6 +896,8 @@ class AnchorFeedTests(TestCase):
         url = f"/api/quiz/anchors/next/?subject_id={self.subject.id}"
         only_pyth = self.client.get(url + "&topics=Pythagoras theorem").json()
         self.assertEqual(only_pyth["id"], self.anchor.id)
+        self.assertEqual(only_pyth["format"], "structured")
+        self.assertIn("marks", only_pyth)
         gone = self.client.get(
             url + f"&exclude={self.anchor.id},{other.id}")
         self.assertEqual(gone.status_code, 404)
