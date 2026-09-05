@@ -293,3 +293,21 @@ def redact_zones(page):
         zones.append([max(0.0, x0), max(0.0, y0),
                       min(float(W), x1), min(float(H), y1)])
     return zones
+
+
+def anchor_text(doc_path: str, page_number: int, bbox) -> str:
+    """Native text inside an anchor bbox (no OCR engine needed)."""
+    import pymupdf
+
+    with pymupdf.open(doc_path) as pdf:
+        page = pdf[page_number - 1]
+        clip = pymupdf.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
+        return page.get_text("text", clip=clip).strip()[:4000]
+
+
+def anchor_marks(text: str) -> int | None:
+    """Marks printed like [2] at the end of a question, if present."""
+    import re
+
+    marks = re.findall(r"\[(\d{1,2})\]", text or "")
+    return int(marks[-1]) if marks else None

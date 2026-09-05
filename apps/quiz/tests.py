@@ -656,7 +656,6 @@ class CropFlowTests(TestCase):
     def test_key_crops_resolves_from_mark_scheme(self):
         from unittest.mock import patch
 
-        from apps.quiz.management.commands.key_crops import Command
         from apps.syllabus.models import SyllabusDocument
         from django.core.management import call_command
 
@@ -664,15 +663,93 @@ class CropFlowTests(TestCase):
             syllabus=self.syllabus, subject=self.subject, title="MS 2024",
             doc_type=SyllabusDocument.DocType.MARK_SCHEME,
             source=SyllabusDocument.Source.EGCSE, year=2024, paper_number=2)
-        payload = ('{"format": "structured", "marks": 2, '
-                   '"correct_index": null, "marking_guidance": "M1 for 5"}')
-        with patch("apps.quiz.management.commands.key_crops._chat",
-                   return_value=payload), patch.object(
-            Command, "_ms_excerpt", return_value="6  M1 for 5 seen"):
+        keys = {"format": "structured", "marks": 2, "correct_index": None,
+                "marking_guidance": "M1 for 5"}
+        with patch("apps.quiz.management.commands.key_crops.extract_keys",
+                   return_value=keys), patch(
+            "apps.quiz.management.commands.key_crops.ms_excerpt_for",
+            return_value="6  M1 for 5 seen"):
             call_command("key_crops", "--subject-code", self.subject.code)
         self.crop.refresh_from_db()
         self.assertEqual(self.crop.marks, 2)
         self.assertIn("M1", self.crop.marking_guidance)
+
+
+class PaperAnswerTests(TestCase):
+    """Tapped paper anchors: text grading, MCQ letters, key caching."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+        self.user = User.objects.create_user("papertest", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        from apps.quiz.models import QuestionAnchor
+        from apps.syllabus.models import SyllabusDocument
+
+        self.doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP 2024",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE, year=2024, paper_number=2)
+        self.anchor = QuestionAnchor.objects.create(
+            document=self.doc, qid="4a", page_number=4,
+            bbox=[0.0, 100.0, 595.0, 400.0], kind="text", confidence=0.9)
+
+    def _post(self, payload):
+        return self.client.post("/api/quiz/paper/answer/", payload,
+                                format="json")
+
+    def test_unknown_anchor_rejected(self):
+        response = self._post({"doc_id": self.doc.id, "qid": "99z"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_answer_text_required(self):
+        response = self._post({"doc_id": self.doc.id, "qid": "4a"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_structured_answer_graded_without_mastery(self):
+        from unittest.mock import patch
+
+        from apps.quiz.models import PaperAttempt
+
+        with patch("apps.quiz.api.grade_text",
+                   return_value=(2.0, 3.0, "Good.")), patch(
+            "apps.quiz.api.PaperAnswerView._ensure_keys",
+        ), patch("apps.quiz.services.cropper.anchor_text",
+                 return_value="Q4a text"):
+            response = self._post(
+                {"doc_id": self.doc.id, "qid": "4a", "answer_text": "x = 5"})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["awarded_marks"], 2.0)
+        self.assertIsNone(body["mastery"])
+        self.assertEqual(PaperAttempt.objects.count(), 1)
+
+    def test_mcq_letter_against_cached_key(self):
+        self.anchor.marks = 1
+        self.anchor.correct_index = 2
+        self.anchor.marking_guidance = "Answer C."
+        self.anchor.save(update_fields=["marks", "correct_index",
+                                        "marking_guidance"])
+        from apps.quiz.models import PaperAttempt
+
+        response = self._post(
+            {"doc_id": self.doc.id, "qid": "4a", "selected_index": 2})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["correct"])
+        self.assertIsNone(body["mastery"])
+        self.assertEqual(PaperAttempt.objects.count(), 1)
+
+    def test_unkeyed_mcq_rejected(self):
+        response = self._post(
+            {"doc_id": self.doc.id, "qid": "4a", "selected_index": 0})
+        self.assertEqual(response.status_code, 400)
+
+    def test_anchors_endpoint_lists_redact_and_pdf(self):
+        response = self.client.get(f"/api/quiz/paper/{self.doc.id}/anchors/")
+        # No PDF file on disk in tests: endpoint reports unavailability.
+        self.assertEqual(response.status_code, 404)
 
 
 class GenerationRetryTests(TestCase):

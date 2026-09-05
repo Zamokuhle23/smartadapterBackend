@@ -8,12 +8,15 @@ from apps.progress.models import MasteryEvent, MasteryRecord
 from apps.progress.services.bkt import update_mastery
 from apps.syllabus.models import Enrollment, LearningObjective, Subject
 
-from .models import CropAttempt, ExamSession, QuestionAnchor, QuestionCrop, QuizAttempt, QuizQuestion
+from .models import CropAttempt, ExamSession, PaperAttempt, QuestionAnchor, QuestionCrop, QuizAttempt, QuizQuestion
 from .services.generator import (
     QuizGenerationError,
+    extract_keys,
+    find_mark_scheme,
     generate_questions,
     grade_structured_answer,
     grade_text,
+    ms_excerpt_for,
     next_exam_question,
     start_exam_session,
 )
@@ -615,5 +618,123 @@ class PaperAnchorsView(APIView):
             "document": doc.id,
             "title": doc.title,
             "subject": doc.subject.code if doc.subject else None,
+            "pdf_url": (request.build_absolute_uri(doc.file.url)
+                        if doc.file else None),
             "pages": pages,
         })
+
+
+class PaperAnswerView(APIView):
+    """POST {doc_id, qid, answer_text?, selected_index?, latency_ms?}.
+
+    Grades one tapped paper anchor: text answers via the LLM against the
+    mark scheme (resolved inline once, cached on the anchor); A-D letters
+    against the cached correct_index. History only, never BKT.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "llm"
+
+    def post(self, request):
+        from apps.quiz.services.cropper import anchor_marks, anchor_text
+        from apps.syllabus.models import SyllabusDocument
+
+        try:
+            doc = SyllabusDocument.objects.select_related("subject").get(
+                pk=request.data.get("doc_id"))
+            anchor = QuestionAnchor.objects.get(
+                document=doc, qid=str(request.data.get("qid") or ""))
+        except (SyllabusDocument.DoesNotExist, QuestionAnchor.DoesNotExist):
+            return Response({"detail": "Unknown paper or question"}, status=400)
+        if doc.subject is not None and Enrollment.objects.filter(
+            student=request.user, subject=doc.subject
+        ).first() is None:
+            return Response({"detail": "Not enrolled in this subject"},
+                            status=403)
+
+        try:
+            text = anchor_text(doc.file.path, anchor.page_number, anchor.bbox)
+        except Exception:  # noqa: BLE001
+            text = ""
+        marks = anchor_marks(text) or anchor.marks or 2
+        self._ensure_keys(doc, anchor, text)
+
+        latency_ms = request.data.get("latency_ms")
+        awarded = max_marks = None
+        feedback = ""
+        correct = False
+        selected = request.data.get("selected_index")
+        if selected is not None and anchor.kind != "drawing":
+            if anchor.correct_index is None:
+                return Response({"detail": "This part is not keyed yet"},
+                                status=400)
+            try:
+                selected = int(selected)
+            except (TypeError, ValueError):
+                return Response({"detail": "selected_index required"}, status=400)
+            if selected not in (0, 1, 2, 3):
+                return Response({"detail": "selected_index out of range"},
+                                status=400)
+            correct = selected == anchor.correct_index
+            max_marks = int(marks)
+            awarded = float(max_marks) if correct else 0.0
+        else:
+            answer_text = (request.data.get("answer_text") or "").strip()
+            if not answer_text:
+                return Response({"detail": "answer_text required"}, status=400)
+            try:
+                awarded, max_marks, feedback = grade_text(
+                    question_text=text or f"Paper Q{anchor.qid}",
+                    guidance=anchor.marking_guidance or "(none supplied)",
+                    marks=marks,
+                    answer_text=answer_text,
+                )
+            except QuizGenerationError as exc:
+                return Response({"detail": str(exc)}, status=503)
+            correct = awarded >= max_marks * 0.5
+
+        PaperAttempt.objects.create(
+            student=request.user,
+            anchor=anchor,
+            answer_text=request.data.get("answer_text") or "",
+            awarded_marks=awarded,
+            correct=correct,
+            latency_ms=latency_ms,
+        )
+        return Response(
+            {
+                "correct": correct,
+                "correct_index": anchor.correct_index,
+                "explanation": feedback,
+                "mastery": None,
+                "awarded_marks": awarded,
+                "max_marks": int(max_marks) if max_marks is not None else None,
+                "feedback": feedback,
+            }
+        )
+
+    @staticmethod
+    def _ensure_keys(doc, anchor, text):
+        """Resolve mark-scheme keys once per anchor (cached forever)."""
+        if anchor.marking_guidance:
+            return
+        ms = find_mark_scheme(doc.subject, doc.year, doc.paper_number)
+        if ms is None:
+            return
+        base = "".join(ch for ch in anchor.qid if ch.isdigit())
+        for qid in (anchor.qid, base):
+            if not qid:
+                continue
+            excerpt = ms_excerpt_for(ms, qid)
+            if not excerpt:
+                continue
+            keys = extract_keys(text, qid, excerpt)
+            if not keys:
+                continue
+            anchor.marks = keys["marks"]
+            anchor.correct_index = keys["correct_index"]
+            anchor.marking_guidance = keys["marking_guidance"]
+            anchor.save(update_fields=["marks", "correct_index",
+                                       "marking_guidance"])
+            return

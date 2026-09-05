@@ -1010,6 +1010,78 @@ def grade_text(question_text: str, guidance: str, marks: int,
     return awarded, max_marks, feedback
 
 
+KEY_PROMPT = """You link an exam question to its mark scheme.
+
+QUESTION:
+{question}
+
+MARK SCHEME EXCERPT (same paper, question {number}):
+{ms}
+
+Reply with ONLY valid JSON, no fences:
+{{"format": "mcq" or "structured",
+  "marks": <total marks, integer>,
+  "correct_index": <0-3 for MCQ with options A-D in the image, else null>,
+  "marking_guidance": "<model answer + mark breakdown>"}}"""
+
+
+def find_mark_scheme(subject, year, paper_number):
+    """The mark-scheme document for a paper, if ingested."""
+    from apps.syllabus.models import SyllabusDocument
+
+    return SyllabusDocument.objects.filter(
+        subject=subject, doc_type=SyllabusDocument.DocType.MARK_SCHEME,
+        year=year, paper_number=paper_number,
+    ).first()
+
+
+def ms_excerpt_for(ms_doc, q_number: str) -> str:
+    """Slice ~2000 chars of mark-scheme text around the question number."""
+    from apps.rag.models import DocumentChunk
+
+    texts = list(DocumentChunk.objects.filter(
+        document=ms_doc).order_by("ordinal").values_list("text", flat=True))
+    blob = "\n".join(texts)
+    if not blob.strip():
+        return ""
+    m = re.search(r"(?mi)^\s*" + re.escape(q_number) + r"\b", blob)
+    if not m:
+        return ""
+    return blob[max(0, m.start() - 200):m.start() + 2000]
+
+
+def extract_keys(question_text: str, q_number: str, ms_excerpt: str):
+    """One LLM call: grading keys for a question. Returns dict or None."""
+    try:
+        raw = _chat([
+            {"role": "system", "content": (
+                "You read mark schemes precisely. Output ONLY valid JSON.")},
+            {"role": "user", "content": KEY_PROMPT.format(
+                question=(question_text or "")[:2000],
+                number=q_number, ms=ms_excerpt[:3000])},
+        ])
+        item = _extract_json_object(raw)
+    except Exception:  # noqa: BLE001 - leave unkeyed, retry later
+        return None
+    fmt = str(item.get("format", "structured")).lower()
+    if fmt not in ("mcq", "structured"):
+        return None
+    try:
+        marks = max(1, min(25, int(item.get("marks", 1))))
+    except (TypeError, ValueError):
+        return None
+    correct = None
+    if fmt == "mcq":
+        try:
+            correct = int(item.get("correct_index"))
+        except (TypeError, ValueError):
+            return None
+        if correct not in (0, 1, 2, 3):
+            return None
+    return {"format": fmt, "marks": marks, "correct_index": correct,
+            "marking_guidance": str(item.get("marking_guidance", ""))[:2000]}
+
+
 _MATH_SYMBOLS = set("+-*/^=()[]{}<>%√∫∑≤≥≠≈")
 
 _STOPWORDS = frozenset(

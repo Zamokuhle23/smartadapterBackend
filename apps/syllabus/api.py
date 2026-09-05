@@ -62,6 +62,10 @@ class DocumentSerializer(serializers.ModelSerializer):
             "chunk_count",
             "error",
             "created_at",
+            "doc_type",
+            "year",
+            "paper_number",
+            "session",
         )
         read_only_fields = ("status", "chunk_count", "error", "created_at")
 
@@ -185,6 +189,16 @@ class DocumentUploadViewSet(viewsets.ModelViewSet):
     serializer_class = DocumentSerializer
     parser_classes = [MultiPartParser, FormParser]
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        subject = self.request.query_params.get("subject")
+        if subject:
+            qs = qs.filter(subject_id=subject)
+        doc_type = self.request.query_params.get("doc_type")
+        if doc_type:
+            qs = qs.filter(doc_type=doc_type)
+        return qs
 
     def get_permissions(self):
         # Only staff may upload content; everyone authenticated may list/read.

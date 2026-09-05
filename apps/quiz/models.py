@@ -139,6 +139,10 @@ class QuestionAnchor(models.Model):
     confidence = models.FloatField(default=0.0)
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.AUTO)
+    # Grading keys (resolved from the mark scheme, NULL until then).
+    marks = models.PositiveSmallIntegerField(default=2)
+    correct_index = models.PositiveSmallIntegerField(null=True, blank=True)
+    marking_guidance = models.TextField(blank=True)
 
     class Meta:
         ordering = ("document_id", "page_number", "qid")
@@ -162,6 +166,23 @@ class CropAttempt(models.Model):
     crop = models.ForeignKey(QuestionCrop, on_delete=models.CASCADE,
                              related_name="attempts")
     selected_index = models.PositiveSmallIntegerField(null=True, blank=True)
+    answer_text = models.TextField(blank=True)
+    awarded_marks = models.FloatField(null=True, blank=True)
+    correct = models.BooleanField(default=False)
+    latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+
+class PaperAttempt(models.Model):
+    """A student's answer on one paper anchor (history only, no BKT)."""
+
+    student = models.ForeignKey(User, on_delete=models.CASCADE,
+                                related_name="paper_attempts")
+    anchor = models.ForeignKey(QuestionAnchor, on_delete=models.CASCADE,
+                               related_name="attempts")
     answer_text = models.TextField(blank=True)
     awarded_marks = models.FloatField(null=True, blank=True)
     correct = models.BooleanField(default=False)
