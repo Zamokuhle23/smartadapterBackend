@@ -28,7 +28,7 @@ from apps.syllabus.models import SyllabusDocument
 SYL_MARK = re.compile(
     r"all learners should be able to|the aims of the syllabus|"
     r"scheme of assessment|% of teaching time|assessment objectives|"
-    r"appendix \d",
+    r"appendix \d|(?m)^\s*\d{1,2}\.\d{1,2}\s+\S",
     re.IGNORECASE)
 Q_MARK = re.compile(
     r"\[\d{1,2}\]|\[Total|Fig\.|Turn over|CANDIDATE NUMBER|CENTRE NUMBER|"
