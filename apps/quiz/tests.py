@@ -493,6 +493,100 @@ class CropperTests(TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class CropFlowTests(TestCase):
+    """Past-paper crops: serve, exclude, grade (no BKT), key from MS."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+        self.user = User.objects.create_user("cropper", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        from apps.quiz.models import QuestionCrop
+        from apps.syllabus.models import SyllabusDocument
+
+        self.doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP 2024",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE, year=2024, paper_number=2)
+        self.crop = QuestionCrop.objects.create(
+            document=self.doc, q_number="6", stable_key="T-Q6",
+            ocr_text="Calculate 2 + 3.", confidence=0.9,
+            format="structured", marks=2)
+
+    def test_next_serves_crop(self):
+        response = self.client.get(
+            f"/api/quiz/crop/next/?subject_id={self.subject.id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], self.crop.id)
+
+    def test_excluded_crop_returns_404(self):
+        response = self.client.get(
+            f"/api/quiz/crop/next/?subject_id={self.subject.id}"
+            f"&exclude={self.crop.id}")
+        self.assertEqual(response.status_code, 404)
+
+    def test_unkeyed_mcq_crop_withheld(self):
+        self.crop.format = "mcq"
+        self.crop.correct_index = None
+        self.crop.save(update_fields=["format", "correct_index"])
+        response = self.client.get(
+            f"/api/quiz/crop/next/?subject_id={self.subject.id}")
+        self.assertEqual(response.status_code, 404)
+
+    def test_structured_crop_answer_graded_without_mastery(self):
+        from unittest.mock import patch
+
+        from apps.quiz.models import CropAttempt
+
+        with patch("apps.quiz.api.grade_text",
+                   return_value=(2.0, 3.0, "Good.")):
+            response = self.client.post(
+                "/api/quiz/crop/answer/",
+                {"crop_id": self.crop.id, "answer_text": "5"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["awarded_marks"], 2.0)
+        self.assertIsNone(body["mastery"])
+        self.assertEqual(CropAttempt.objects.count(), 1)
+
+    def test_mcq_crop_answer_marks_correct(self):
+        self.crop.format = "mcq"
+        self.crop.correct_index = 1
+        self.crop.marks = 2
+        self.crop.save(update_fields=["format", "correct_index", "marks"])
+        response = self.client.post(
+            "/api/quiz/crop/answer/",
+            {"crop_id": self.crop.id, "selected_index": 1},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["correct"])
+
+    def test_key_crops_resolves_from_mark_scheme(self):
+        from unittest.mock import patch
+
+        from apps.quiz.management.commands.key_crops import Command
+        from apps.syllabus.models import SyllabusDocument
+        from django.core.management import call_command
+
+        SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="MS 2024",
+            doc_type=SyllabusDocument.DocType.MARK_SCHEME,
+            source=SyllabusDocument.Source.EGCSE, year=2024, paper_number=2)
+        payload = ('{"format": "structured", "marks": 2, '
+                   '"correct_index": null, "marking_guidance": "M1 for 5"}')
+        with patch("apps.quiz.management.commands.key_crops._chat",
+                   return_value=payload), patch.object(
+            Command, "_ms_excerpt", return_value="6  M1 for 5 seen"):
+            call_command("key_crops", "--subject-code", self.subject.code)
+        self.crop.refresh_from_db()
+        self.assertEqual(self.crop.marks, 2)
+        self.assertIn("M1", self.crop.marking_guidance)
+
+
 class GenerationRetryTests(TestCase):
     """An all-bare batch gets one strict retry before surfacing an error."""
 

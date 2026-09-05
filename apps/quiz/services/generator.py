@@ -962,11 +962,22 @@ def next_exam_question(session: ExamSession) -> QuizQuestion | None:
 
 def grade_structured_answer(question: QuizQuestion, answer_text: str) -> tuple[float, float, str]:
     """Rubric-grade a free-response answer with the LLM. Returns (awarded, max, feedback)."""
-    max_marks = float(question.marks or 1)
-    prompt = GRADE_PROMPT.format(
-        marks=question.marks or 1,
-        question=question.question_text,
+    return grade_text(
+        question_text=question.question_text,
         guidance=question.marking_guidance or question.explanation or "(none supplied)",
+        marks=question.marks or 1,
+        answer_text=answer_text,
+    )
+
+
+def grade_text(question_text: str, guidance: str, marks: int,
+               answer_text: str) -> tuple[float, float, str]:
+    """Grade any free-response text (bank questions and paper crops alike)."""
+    max_marks = float(marks or 1)
+    prompt = GRADE_PROMPT.format(
+        marks=marks or 1,
+        question=question_text,
+        guidance=guidance or "(none supplied)",
         answer=answer_text[:3000],
     )
     raw = _chat(
@@ -984,8 +995,8 @@ def grade_structured_answer(question: QuizQuestion, answer_text: str) -> tuple[f
     feedback = str(result.get("feedback", ""))[:2000]
     if awarded > 0 and _is_no_attempt(
         answer_text,
-        question.question_text or "",
-        question.marking_guidance or question.explanation or "",
+        question_text or "",
+        guidance or "",
     ):
         # Backstop for grader hallucinations: a response with no digits, no
         # mathematical symbols and no shared vocabulary with the question or

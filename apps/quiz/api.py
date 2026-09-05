@@ -2,16 +2,18 @@ from rest_framework import permissions, serializers
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from django.db import models
 
 from apps.progress.models import MasteryEvent, MasteryRecord
 from apps.progress.services.bkt import update_mastery
 from apps.syllabus.models import Enrollment, LearningObjective, Subject
 
-from .models import ExamSession, QuizAttempt, QuizQuestion
+from .models import CropAttempt, ExamSession, QuestionCrop, QuizAttempt, QuizQuestion
 from .services.generator import (
     QuizGenerationError,
     generate_questions,
     grade_structured_answer,
+    grade_text,
     next_exam_question,
     start_exam_session,
 )
@@ -389,3 +391,173 @@ class ExamNextView(APIView):
         if question is None:
             return Response(None, status=204)
         return Response(QuestionPublicSerializer(question, context={"request": self.request}).data)
+
+
+# --------------------------------------------------------------------------
+# Past-paper crops: exact scanned questions (text + diagram + table as one).
+# --------------------------------------------------------------------------
+
+
+class CropPublicSerializer(serializers.ModelSerializer):
+    """A crop serialises like a question so the app reuses its UI.
+
+    MCQ crops carry generic A-D options (the options live in the image);
+    structured crops carry none. Grading keys come from the mark scheme.
+    """
+    options = serializers.SerializerMethodField()
+    image_urls = serializers.SerializerMethodField()
+    topic_title = serializers.SerializerMethodField()
+    paper_label = serializers.SerializerMethodField()
+    source_year = serializers.SerializerMethodField()
+    source = serializers.SerializerMethodField()
+
+    class Meta:
+        model = QuestionCrop
+        fields = (
+            "id", "q_number", "stable_key", "format", "marks",
+            "correct_index", "options", "image_urls", "ocr_text",
+            "topic_title", "paper_label", "source_year", "source",
+        )
+
+    def get_options(self, obj):
+        return ["A", "B", "C", "D"] if obj.format == "mcq" else []
+
+    def get_image_urls(self, obj):
+        request = self.context.get("request")
+        urls = []
+        for img in obj.images.all():
+            if not img.image:
+                continue
+            path = img.image.url
+            urls.append(request.build_absolute_uri(path) if request else path)
+        return urls
+
+    def _doc(self, obj):
+        return obj.document
+
+    def get_topic_title(self, obj):
+        return f"Past paper Q{obj.q_number}"
+
+    def get_paper_label(self, obj):
+        paper = self._doc(obj).paper_number
+        return f"Paper {paper}" if paper else "Past paper"
+
+    def get_source_year(self, obj):
+        return self._doc(obj).year
+
+    def get_source(self, obj):
+        return self._doc(obj).source
+
+
+class NextCropView(APIView):
+    """GET ?subject_id=N&exclude=1,2 -> next past-paper crop (never repeats).
+
+    Serves approved/auto crops; MCQ crops only once keyed (correct_index).
+    404 when nothing fresh remains (the app falls back to text questions).
+    Crop answers never touch the BKT mastery model.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            subject = Subject.objects.get(pk=request.query_params.get("subject_id"))
+        except Subject.DoesNotExist:
+            return Response({"detail": "Unknown subject_id"}, status=400)
+        if Enrollment.objects.filter(student=request.user, subject=subject).first() is None:
+            return Response(
+                {"detail": "Enroll in this subject before practising"},
+                status=403,
+            )
+        exclude_ids = _parse_id_list(request.query_params.getlist("exclude"))
+        qs = QuestionCrop.objects.filter(
+            document__subject=subject,
+            status__in=(QuestionCrop.Status.AUTO, QuestionCrop.Status.APPROVED),
+        ).exclude(
+            # Unkeyed MCQ crops are show-only (no correct answer to mark
+            # against); structured ones grade by LLM either way.
+            models.Q(format="mcq", correct_index__isnull=True),
+        )
+        if exclude_ids:
+            qs = qs.exclude(id__in=list(exclude_ids))
+        crop = qs.order_by("?").first()
+        if crop is None:
+            return Response({"detail": "no_questions"}, status=404)
+        return Response(CropPublicSerializer(crop, context={"request": self.request}).data)
+
+
+class CropAnswerView(APIView):
+    """POST {crop_id, selected_index? | answer_text?} -> grade (no BKT)."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "llm"
+
+    def post(self, request):
+        try:
+            crop = QuestionCrop.objects.select_related("document").get(
+                pk=request.data.get("crop_id"))
+        except QuestionCrop.DoesNotExist:
+            return Response({"detail": "Unknown crop_id"}, status=400)
+        if Enrollment.objects.filter(
+            student=request.user, subject=crop.document.subject
+        ).first() is None:
+            return Response({"detail": "Not enrolled in this question's subject"},
+                            status=403)
+
+        latency_ms = request.data.get("latency_ms")
+        awarded = max_marks = None
+        feedback = ""
+        explanation = ""
+        correct = False
+        selected = None
+
+        if crop.format == "mcq":
+            if crop.correct_index is None:
+                return Response({"detail": "This crop is not keyed yet"},
+                                status=400)
+            try:
+                selected = int(request.data.get("selected_index"))
+            except (TypeError, ValueError):
+                return Response({"detail": "selected_index required"}, status=400)
+            if not (0 <= selected < 4):
+                return Response({"detail": "selected_index out of range"}, status=400)
+            correct = selected == crop.correct_index
+            max_marks = int(crop.marks or 1)
+            awarded = float(max_marks) if correct else 0.0
+        else:
+            answer_text = (request.data.get("answer_text") or "").strip()
+            if not answer_text:
+                return Response({"detail": "answer_text required"}, status=400)
+            try:
+                awarded, max_marks, feedback = grade_text(
+                    question_text=crop.ocr_text or f"Past paper Q{crop.q_number}",
+                    guidance=crop.marking_guidance or "(none supplied)",
+                    marks=crop.marks or 1,
+                    answer_text=answer_text,
+                )
+            except QuizGenerationError as exc:
+                return Response({"detail": str(exc)}, status=503)
+            correct = awarded >= max_marks * 0.5
+            explanation = feedback
+
+        CropAttempt.objects.create(
+            student=request.user,
+            crop=crop,
+            selected_index=selected,
+            answer_text=request.data.get("answer_text") or "",
+            awarded_marks=awarded,
+            correct=correct,
+            latency_ms=latency_ms,
+        )
+        return Response(
+            {
+                "correct": correct,
+                "correct_index": crop.correct_index if crop.format == "mcq" else None,
+                "explanation": explanation,
+                "mastery": None,
+                "awarded_marks": awarded,
+                "max_marks": int(max_marks) if max_marks is not None else None,
+                "feedback": feedback,
+            }
+        )

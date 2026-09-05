@@ -9,9 +9,11 @@ from apps.accounts.api import LearnerProfileView, RegisterView
 from apps.progress.api import DashboardView, RecordAttemptView, WorkspaceView
 from apps.quiz.api import (
     AnswerQuizView,
+    CropAnswerView,
     ExamNextView,
     ExamStateView,
     GenerateQuizView,
+    NextCropView,
     NextQuestionView,
     StartExamView,
 )
@@ -51,6 +53,8 @@ urlpatterns = [
     path("api/quiz/generate/", GenerateQuizView.as_view(), name="quiz-generate"),
     path("api/quiz/next/", NextQuestionView.as_view(), name="quiz-next"),
     path("api/quiz/answer/", AnswerQuizView.as_view(), name="quiz-answer"),
+    path("api/quiz/crop/next/", NextCropView.as_view(), name="crop-next"),
+    path("api/quiz/crop/answer/", CropAnswerView.as_view(), name="crop-answer"),
     path("api/quiz/exam/start/", StartExamView.as_view(), name="exam-start"),
     path("api/quiz/exam/<int:pk>/", ExamStateView.as_view(), name="exam-state"),
     path("api/quiz/exam/<int:pk>/next/", ExamNextView.as_view(), name="exam-next"),

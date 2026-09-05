@@ -82,6 +82,10 @@ class QuestionCrop(models.Model):
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.AUTO)
     # Grading linkage (from the mark scheme crop; NULL until resolved).
+    # format mirrors QuizQuestion ("mcq" with A-D options in the image,
+    # else "structured" free response graded against marking_guidance).
+    format = models.CharField(max_length=12, default="structured")
+    marks = models.PositiveSmallIntegerField(default=1)
     correct_index = models.PositiveSmallIntegerField(null=True, blank=True)
     marking_guidance = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -110,6 +114,25 @@ class QuestionCropImage(models.Model):
 
     class Meta:
         ordering = ("sort",)
+
+
+class CropAttempt(models.Model):
+    """A student's attempt at a cropped past-paper question (history only;
+    crop answers don't feed the BKT mastery model)."""
+
+    student = models.ForeignKey(User, on_delete=models.CASCADE,
+                                related_name="crop_attempts")
+    crop = models.ForeignKey(QuestionCrop, on_delete=models.CASCADE,
+                             related_name="attempts")
+    selected_index = models.PositiveSmallIntegerField(null=True, blank=True)
+    answer_text = models.TextField(blank=True)
+    awarded_marks = models.FloatField(null=True, blank=True)
+    correct = models.BooleanField(default=False)
+    latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
 
 
 class ExamBlueprint(models.Model):
