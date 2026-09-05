@@ -35,6 +35,8 @@ class Command(BaseCommand):
         parser.add_argument("--subject-code", required=True)
         parser.add_argument("--limit-pages", type=int, default=0)
         parser.add_argument("--max-chars", type=int, default=1500)
+        parser.add_argument("--source", default="",
+                            help="Only tag docs of this source (egcse/igcse)")
 
     def handle(self, *args, **options):
         try:
@@ -45,6 +47,7 @@ class Command(BaseCommand):
         docs = list(SyllabusDocument.objects.filter(
             subject=subject,
             doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            **({"source": options["source"]} if options["source"] else {}),
         ).order_by("id"))
         done = skipped = failed = 0
         for doc in docs:
