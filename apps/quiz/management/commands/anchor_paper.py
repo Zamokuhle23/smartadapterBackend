@@ -27,6 +27,11 @@ class Command(BaseCommand):
             doc = SyllabusDocument.objects.get(pk=options["doc_id"])
         except SyllabusDocument.DoesNotExist:
             raise CommandError(f"No document {options['doc_id']}")
+        if doc.doc_type != SyllabusDocument.DocType.PAST_PAPER:
+            self.stdout.write(self.style.WARNING(
+                f"Skipped {doc.title[:50]}: not a past paper "
+                f"({doc.doc_type})"))
+            return
         import pymupdf
 
         pdf = pymupdf.open(doc.file.path)

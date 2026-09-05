@@ -906,8 +906,10 @@ class PracticePagesView(APIView):
             limit = max(1, min(50, int(request.query_params.get("limit", 20))))
         except (TypeError, ValueError):
             limit = 20
-        pages = (QuestionAnchor.objects.filter(document__subject=subject)
-                 .values("document_id", "page_number").distinct())
+        pages = (QuestionAnchor.objects.filter(
+            document__subject=subject,
+            document__doc_type=SyllabusDocument.DocType.PAST_PAPER)
+            .values("document_id", "page_number").distinct())
         if topics:
             from django.db.models import F as _F
             from django.db.models import Q as _Q
