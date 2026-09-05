@@ -911,3 +911,78 @@ class FigureAttachmentTests(TestCase):
         line = _figure_prompt_line([])
         self.assertIn("No source diagrams are available", line)
         self.assertIn("figure_required", line)
+
+    def test_forced_figures_stripped_when_text_ignores_them(self):
+        from apps.quiz.services.generator import _question_from_item
+        from apps.quiz.models import QuizQuestion
+
+        _doc, fig, chunk = self._make_figured_chunk()
+        q = _question_from_item(
+            self.subject,
+            {"question": "Solve 2x + 3 = 11.",
+             "format": "structured", "marks": 2,
+             "figure_required": False,
+             "objective_hint": "Algebra"},
+            None, [chunk], force_figure_ids=[fig.id],
+        )
+        self.assertIsNotNone(q)
+        self.assertEqual(QuizQuestion.objects.get(pk=q.pk).figures.count(), 0)
+
+    def test_forced_figures_kept_when_referenced(self):
+        from apps.quiz.services.generator import _question_from_item
+        from apps.quiz.models import QuizQuestion
+
+        _doc, fig, chunk = self._make_figured_chunk()
+        q = _question_from_item(
+            self.subject,
+            {"question": "Label parts A, B and C (see diagram).",
+             "format": "structured", "marks": 3,
+             "figure_required": False,
+             "objective_hint": "Heart"},
+            None, [chunk], force_figure_ids=[fig.id],
+        )
+        self.assertIsNotNone(q)
+        self.assertEqual(QuizQuestion.objects.get(pk=q.pk).figures.count(), 1)
+
+
+class SeedFigureQuestionsTests(TestCase):
+    """Needs PostgreSQL (embedding_vec has no SQLite column); verified live."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+
+    def test_command_passes_page_figures(self):
+        from django.db import connection
+
+        if connection.vendor != "postgresql":
+            self.skipTest("requires PostgreSQL")
+        from unittest.mock import patch
+
+        from apps.rag.models import DocumentChunk, DocumentFigure
+        from apps.syllabus.models import SyllabusDocument
+        from django.core.files.base import ContentFile
+        from django.core.management import call_command
+
+        doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP figs",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE)
+        fig = DocumentFigure(document=doc, page_number=3, ordinal=0)
+        fig.image.save("s.png", ContentFile(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50),
+                       save=True)
+        DocumentChunk.objects.create(
+            syllabus=self.syllabus, document=doc, subject=self.subject,
+            ordinal=0, page_number=3, text="triangle diagram labels")
+
+        seen = {}
+
+        def fake_generate(subject, **kwargs):
+            seen.update(kwargs)
+            return []
+
+        with patch("apps.quiz.management.commands.seed_figure_questions"
+                   ".generate_questions", side_effect=fake_generate):
+            call_command("seed_figure_questions", "--subject-code",
+                         self.subject.code, "--count", "2")
+        self.assertEqual(seen.get("force_figure_ids"), [fig.id])
+        self.assertEqual(len(seen.get("force_chunks") or []), 1)

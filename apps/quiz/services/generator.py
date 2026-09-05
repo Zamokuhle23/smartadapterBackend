@@ -357,7 +357,8 @@ def _build_context(chunks) -> str:
 
 def generate_questions(subject, count: int = 3, difficulty: int | None = None,
                        objective=None, tier: str = "", topic_ids=None,
-                       objective_ids=None, query: str | None = None) -> list[QuizQuestion]:
+                       objective_ids=None, query: str | None = None,
+                       force_chunks=None, force_figure_ids=None) -> list[QuizQuestion]:
     """Adaptive practice questions: past-paper variations first.
 
     Selection is scoped to the objectives/topics the student has chosen:
@@ -367,6 +368,8 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
     Questions are spread across the selection so one topic isn't over-served.
     query overrides the retrieval query (e.g. to aim generation at
     diagram-rich chunks for figure-bearing questions).
+    force_chunks + force_figure_ids drive figure-first generation: chunks from
+    one figured page, with those figures pre-attached to the result.
     """
     count = max(1, min(int(count), 10))
 
@@ -400,11 +403,14 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
         derived = f"{subject.name} past exam questions typical examination items"
     query = query or derived
 
-    raw_chunks = retrieve(subject.syllabus, query, k=16, subject=subject)
-    # Ground questions in real exam items only: mark schemes describe
-    # marking (not questions) and syllabi describe curriculum (not items).
-    raw_chunks = _past_paper_chunks(raw_chunks)
-    raw_chunks = _filter_chunks_by_tier(raw_chunks, tier)
+    if force_chunks is not None:
+        raw_chunks = list(force_chunks)
+    else:
+        raw_chunks = retrieve(subject.syllabus, query, k=16, subject=subject)
+        # Ground questions in real exam items only: mark schemes describe
+        # marking (not questions) and syllabi describe curriculum (not items).
+        raw_chunks = _past_paper_chunks(raw_chunks)
+        raw_chunks = _filter_chunks_by_tier(raw_chunks, tier)
     pp_sources = [_chunk_source(c) for c in _past_paper_chunks(raw_chunks)]
     preferred = _preferred_source(pp_sources)
     chunks = _prioritise_past_papers(raw_chunks, k=6, preferred_source=preferred)
@@ -454,7 +460,8 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
         for idx, item in enumerate(_extract_json_array(raw_text)):
             pin = pins[idx % len(pins)] if pins else None
             q = _question_from_item(subject, item, pin, wide_chunks,
-                                    default_difficulty=difficulty)
+                                    default_difficulty=difficulty,
+                                    force_figure_ids=force_figure_ids)
             if q is not None:
                 made.append(q)
         return made
@@ -472,8 +479,14 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
 
 def _question_from_item(subject, item: dict, objective, chunks,
                         default_difficulty: int = 2,
-                        force_paper_label: str | None = None) -> QuizQuestion | None:
-    """Validate one LLM item dict and persist it as a QuizQuestion with provenance."""
+                        force_paper_label: str | None = None,
+                        force_figure_ids=None) -> QuizQuestion | None:
+    """Validate one LLM item dict and persist it as a QuizQuestion with provenance.
+
+    force_figure_ids pre-attaches known figures (figure-first generation):
+    the model is told they WILL be shown. Text still decides: unreferenced
+    figures are stripped, dangling references go through ASCII repair.
+    """
     fmt = str(item.get("format", "mcq")).lower()
     if fmt not in (QuizQuestion.Format.MCQ, QuizQuestion.Format.STRUCTURED):
         fmt = QuizQuestion.Format.MCQ
@@ -547,14 +560,22 @@ def _question_from_item(subject, item: dict, objective, chunks,
         # figure_required=true IS the reuse contract: the real source image
         # is attached here, no matter the adapted flag.
         _attach_figures(question, chunks)
-    if _is_bare_diagram_reference(question):
-        # The model promised a diagram/data it didn't supply. Ask it to draw
-        # just the missing figure instead of throwing the question away.
+    if force_figure_ids:
+        from apps.rag.models import DocumentFigure
+
+        question.figures.set(DocumentFigure.objects.filter(
+            id__in=list(force_figure_ids)[:6]))
+    if _text_has_dangling_reference(question.question_text,
+                                    question.figures.exists()):
+        # Dangling reference: repair by drawing, else drop (existing path).
         if _repair_with_ascii(question):
             return question
-        # Never serve a question that points at a missing figure.
         question.delete()
         return None
+    if question.figures.exists() and not _BARE_REFERENCE_RE.search(
+            question.question_text or ""):
+        # Figures attached but text ignores them: strip, keep the text.
+        question.figures.clear()
     return question
 
 
