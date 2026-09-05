@@ -34,8 +34,12 @@ class Command(BaseCommand):
         except Subject.DoesNotExist:
             raise CommandError(
                 f"No subject with code {options['subject_code']}")
+        from django.db.models import Q
+
         anchors = list(QuestionAnchor.objects.filter(
-            document__subject=subject, marking_guidance="",
+            document__subject=subject,
+        ).filter(
+            Q(marking_guidance="") | Q(marking_guidance__isnull=True),
         ).select_related("document").order_by("id"))
         if options["limit"]:
             anchors = anchors[:options["limit"]]
