@@ -58,20 +58,15 @@ Rules:
   setting (e.g. a river in England -> the same-shaped river in Norway). Set
   "figure_required": true and refer to it as "(see diagram)" / "In the diagram...".
   DO NOT draw or change the figure's geometry.
-  SCENARIO 2 (DRAW a fresh ASCII diagram): When the figure's NUMBERS would need to
-  change for a new variant (e.g. a triangle with different side lengths, a circuit
-  with new resistor values, a new number line), DO NOT reuse the image. Instead
-  DRAW a brand-new, internally-consistent monospace ASCII figure inside the
-  question text in a ``` ascii code block: a labelled triangle, axes, number line
-  or simple diagram. Use only ASCII glyphs (A-Z, a-z, 0-9, . | / \\ - _ = + * ())
-  and align the rows so it reads as a shape; put each label letter on its own
-  spot. Set "figure_required": false. This is how each student gets a FRESH,
-   unique diagram so questions never look identical. NEVER leave a bare "see
-   diagram" with no drawing.
+  SCENARIO 2 (no reusable image): When the figure's NUMBERS would need to
+  change for a new variant (e.g. a triangle with different side lengths),
+  DO NOT reuse the image and DO NOT draw ASCII art. Instead write a
+  DIFFERENT question on the same skill that needs no diagram at all.
+  NEVER leave a bare "see diagram" with no drawing.
    * Never invent a figure, label or value that is not implied by the source chunk.
- - Responses that mention a diagram ("see diagram", "In the diagram", ...) but
-   contain no ```ascii drawing are automatically discarded and earn you nothing.
-   When in doubt, draw the ASCII block.
+- Responses that mention a diagram ("see diagram", "In the diagram", ...)
+  without an attached real image are automatically discarded. Never
+  reference a diagram unless it is the attached one.
 - Data tables and graph data: if the item needs a table, frequency table or
    data set, include the COMPLETE data inline as a markdown table
    (| Score | Frequency |, one row per entry). NEVER write "the table below"
@@ -131,11 +126,10 @@ Rules:
   read off, a shape to compare), ask the question AROUND WHAT IS IN that image and
   REUSE it. Set "figure_required": true; refer to it as "(see diagram)". Do NOT
   redraw or change its geometry.
-  SCENARIO 2 (DRAW a fresh ASCII diagram): if the figure's NUMBERS would vary for a
-   new question, DRAW a brand-new monospace ASCII figure in a ``` ascii code block
-   inside the question text (labelled triangle, axes, number line). Use only ASCII
-   glyphs and align the rows so it reads as a shape. Set "figure_required": false so
-   every student gets a fresh, unique diagram. NEVER a bare "see diagram".
+  SCENARIO 2 (no reusable image): if the figure's NUMBERS would vary for a
+   new question, DO NOT reuse the image and DO NOT draw ASCII art. Write a
+   DIFFERENT question on the same topic that needs no diagram. NEVER a bare
+   "see diagram".
 - {figure_line}
 - Data tables: include the COMPLETE data inline as a markdown table
   (| Score | Frequency |). NEVER write "the table below" without the table.
@@ -567,8 +561,9 @@ def _question_from_item(subject, item: dict, objective, chunks,
             id__in=list(force_figure_ids)[:6]))
     if _text_has_dangling_reference(question.question_text,
                                     question.figures.exists()):
-        # Dangling reference: repair by drawing, else drop (existing path).
-        if _repair_with_ascii(question):
+        # Dangling data reference: recover the table, else drop. Shape
+        # references are dropped outright (ASCII drawing retired).
+        if _repair_with_table(question):
             return question
         question.delete()
         return None
@@ -619,62 +614,31 @@ def _is_bare_diagram_reference(question) -> bool:
     return _text_has_dangling_reference(question.question_text, has_figures)
 
 
-def _repair_with_ascii(question) -> bool:
-    """Draw the missing figure, verify it, and append it.
+def _repair_with_table(question) -> bool:
+    """Recover a data-table reference with one extra LLM call.
 
-    Returns True when the question now carries a checked figure and can be
-    served; False when drawing or verification failed, in which case the
-    caller drops the item. Any provider error also means False - repair must
-    never break generation.
+    ASCII shape drawing is retired: models cannot draw geometry
+    reliably, and real figures come from page crops. Only markdown
+    data tables are repaired; shape references are dropped by the
+    caller. Never breaks generation (False on any failure).
     """
     try:
         raw = _chat([
             {"role": "system", "content": (
-                "You draw exam diagrams. Output ONLY the figure, no prose.")},
+                "You output data tables. ONLY the table, no prose.")},
             {"role": "user", "content": (
-                "Draw ONLY the figure this question refers to. If it is a "
-                "shape/diagram, reply with a ```ascii monospace block "
-                "(only A-Z 0-9 . | / \\ - _ = + * ()). If it is data/a "
-                "table, reply with a markdown table (| col | col |) holding "
-                "the COMPLETE data.\n"
-                "Construction rules for triangles: put the right angle at "
-                "the stated vertex using | for the vertical side and --- "
-                "for the horizontal side, / or \\ only for the hypotenuse. "
-                "Every vertex label sits ON the shape, touching its lines. "
-                "Side lengths sit alongside the side they measure. No "
-                "floating or detached parts.\n"
-                "Example right-angled at B:\n"
-                "```ascii\n"
-                "A\n"
-                "|\n"
-                "| 3 cm\n"
-                "|________\n"
-                "B   4 cm   C\n"
-                "```\n"
-                f"QUESTION:\n{question.question_text}"
+                "The question below refers to a missing data table. "
+                "Reply with ONLY a markdown table holding the COMPLETE "
+                "data. If you do not know the exact data, reply UNKNOWN."
+                f"QUESTION:{chr(10)}{question.question_text}"
             )},
         ])
     except Exception:
         return False
-    m = re.search(r"```(?:ascii)?\s*\n(.*?)```", raw, re.DOTALL)
-    block = m.group(1).strip() if m else ""
-    is_table = False
-    if not block:
-        # Maybe it returned a bare markdown table instead.
-        table = [ln for ln in raw.splitlines()
-                 if re.match(r"\s*\|.*\|\s*$", ln)]
-        if len(table) < 2:
-            return False
-        block = "\n".join(table)
-        is_table = True
-    else:
-        block = "```ascii\n" + block + "\n```"
-    if not is_table and not _ascii_passes_checks(
-            question.question_text or "", block):
+    table = [ln for ln in raw.splitlines() if _is_table_line(ln)]
+    if len(table) < 2:
         return False
-    if not is_table and not _judge_ascii(question.question_text or "", block):
-        return False
-    question.question_text = (question.question_text or "").rstrip() + "\n" + block
+    question.question_text = ((question.question_text or "").rstrip() + chr(10) + chr(10).join(table))
     try:
         question.save(update_fields=["question_text"])
     except Exception:
@@ -682,40 +646,10 @@ def _repair_with_ascii(question) -> bool:
     return True
 
 
-def _ascii_passes_checks(question_text: str, block: str) -> bool:
-    """Cheap structural checks before paying for a judge call."""
-    lines = [ln.rstrip() for ln in block.splitlines() if ln.strip()]
-    if len(lines) < 4 or len(lines) > 20:
-        return False
-    if any(len(ln) > 40 for ln in lines):
-        return False
-    labels = set(re.findall(r"\b[A-Z]\b", question_text))
-    inner = block
-    if inner.startswith("```"):
-        inner = "\n".join(inner.splitlines()[1:])
-    if inner.rstrip().endswith("```"):
-        inner = "\n".join(inner.splitlines()[:-1])
-    return all(lbl in inner for lbl in labels)
-
-
-def _judge_ascii(question_text: str, block: str) -> bool:
-    """Ask the model whether its own drawing is actually correct."""
-    try:
-        verdict = _chat([
-            {"role": "system", "content": (
-                "You inspect exam diagrams. Reply with a single word.")},
-            {"role": "user", "content": (
-                "Does this figure correctly illustrate the question? Reply "
-                "YES only if every labelled point sits ON the shape (none "
-                "floating detached), the shape type matches, measurements "
-                "sit alongside the side they measure, and there are no "
-                "stray disconnected parts. Otherwise reply NO.\n"
-                f"QUESTION:\n{question_text}\nFIGURE:\n{block}"
-            )},
-        ])
-    except Exception:
-        return False
-    return verdict.strip().upper().startswith("YES")
+def _is_table_line(line) -> bool:
+    """A markdown pipe-table row without regex backslashes."""
+    s = line.strip()
+    return len(s) >= 2 and s.startswith("|") and s.endswith("|")
 
 
 def _figure_prompt_line(chunks) -> str:

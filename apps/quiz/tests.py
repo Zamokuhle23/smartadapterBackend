@@ -774,26 +774,24 @@ class BareDiagramReferenceTests(TestCase):
         )
         self.assertIsNotNone(q)
 
-    def test_bare_reference_is_repaired_with_ascii(self):
+    def test_bare_table_reference_is_repaired_with_table(self):
         from unittest.mock import patch
 
         from apps.quiz.services.generator import _question_from_item
 
         with patch(
             "apps.quiz.services.generator._chat",
-            side_effect=["```ascii\nA\n|\n| 3 cm\nB---C\n```", "YES"],
+            return_value="| Score | Frequency |\n| 5 | 8 |\n| 6 | 12 |",
         ):
             q = _question_from_item(
                 self.subject,
-                self._item(question="In the diagram, triangle ABC is "
-                                    "right-angled at B. Find AC. (see diagram)"),
+                self._item(question="The table below shows scores. Find the mean."),
                 self.obj, [],
             )
         self.assertIsNotNone(q)
-        self.assertIn("```ascii", q.question_text)
-        self.assertIn("B---C", q.question_text)
+        self.assertIn("| Score | Frequency |", q.question_text)
 
-    def test_judge_rejects_bad_drawing(self):
+    def test_ascii_shape_repair_is_retired(self):
         from unittest.mock import patch
 
         from apps.quiz.services.generator import _question_from_item
@@ -802,7 +800,7 @@ class BareDiagramReferenceTests(TestCase):
         before = QuizQuestion.objects.count()
         with patch(
             "apps.quiz.services.generator._chat",
-            side_effect=["```ascii\nA\n|\n| 3 cm\nB---C\n```", "NO"],
+            return_value="```ascii\nA\n|\n| 3 cm\nB---C\n```",
         ):
             q = _question_from_item(
                 self.subject,
