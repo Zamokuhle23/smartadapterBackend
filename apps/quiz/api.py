@@ -747,6 +747,31 @@ class PaperAnswerView(APIView):
             }
         )
 
+    @staticmethod
+    def _ensure_keys(doc, anchor, text):
+        """Resolve mark-scheme keys once per anchor (cached forever)."""
+        if anchor.marking_guidance:
+            return
+        ms = find_mark_scheme(doc.subject, doc.year, doc.paper_number)
+        if ms is None:
+            return
+        base = "".join(ch for ch in anchor.qid if ch.isdigit())
+        for qid in (anchor.qid, base):
+            if not qid:
+                continue
+            excerpt = ms_excerpt_for(ms, qid)
+            if not excerpt:
+                continue
+            keys = extract_keys(text, qid, excerpt)
+            if not keys:
+                continue
+            anchor.marks = keys["marks"]
+            anchor.correct_index = keys["correct_index"]
+            anchor.marking_guidance = keys["marking_guidance"]
+            anchor.save(update_fields=["marks", "correct_index",
+                                       "marking_guidance"])
+            return
+
 
 class PaperExplainView(APIView):
     """POST {doc_id, qid} -> on-demand explanation for one paper question.
@@ -821,31 +846,6 @@ class PaperExplainView(APIView):
             if len(bits) >= 3:
                 break
         return "\n\n".join(bits)
-
-    @staticmethod
-    def _ensure_keys(doc, anchor, text):
-        """Resolve mark-scheme keys once per anchor (cached forever)."""
-        if anchor.marking_guidance:
-            return
-        ms = find_mark_scheme(doc.subject, doc.year, doc.paper_number)
-        if ms is None:
-            return
-        base = "".join(ch for ch in anchor.qid if ch.isdigit())
-        for qid in (anchor.qid, base):
-            if not qid:
-                continue
-            excerpt = ms_excerpt_for(ms, qid)
-            if not excerpt:
-                continue
-            keys = extract_keys(text, qid, excerpt)
-            if not keys:
-                continue
-            anchor.marks = keys["marks"]
-            anchor.correct_index = keys["correct_index"]
-            anchor.marking_guidance = keys["marking_guidance"]
-            anchor.save(update_fields=["marks", "correct_index",
-                                       "marking_guidance"])
-            return
 
 
 # --------------------------------------------------------------------------
