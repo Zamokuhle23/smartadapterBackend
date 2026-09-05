@@ -77,20 +77,23 @@ def detect_anchors(lines, page_width: float, expected=None):
         if not left:
             continue
         if expected is None:
-            if strong and not loose:
+            if left and ln["size"] >= body_size * 0.99 and not loose:
+                # First anchor: strict shape + body size (Cambridge numbers
+                # are not bold).
                 anchors.append({"number": str(num), "top": ln["top"],
-                                "confident": ln["bold"]})
+                                "x0": ln["x0"], "confident": ln["bold"]})
                 expected = num + 1
         elif num == expected and (strong or not loose):
             anchors.append({"number": str(num), "top": ln["top"],
+                            "x0": ln["x0"],
                             "confident": strong and not loose})
             expected = num + 1
         elif (strong and not loose and expected is not None
                 and expected < num <= expected + 3):
             # Papers occasionally skip a number: follow with low confidence
-            # so one gap doesn't swallow the rest of the paper.
+            # so one gap does not swallow the rest of the paper.
             anchors.append({"number": str(num), "top": ln["top"],
-                            "confident": False})
+                            "x0": ln["x0"], "confident": False})
             expected = num + 1
     return anchors, expected
 
@@ -144,6 +147,23 @@ def detect_questions(doc):
                     break
             trimmed.append((pno, top, bottom))
         q["pages"] = trimmed[:3]
+    # Content x-bounds per question (trims margin strips for the crop).
+    for q in questions:
+        xs = []
+        for pno, top, bottom in q["pages"]:
+            for ln in page_lines_cache.get(pno, []):
+                if not (top <= ln["top"] < bottom):
+                    continue
+                if not ln["text"].strip():
+                    continue
+                if FOOTER.search(ln["text"]):
+                    continue
+                if "MARGIN" in ln["text"].upper():
+                    continue
+                xs.append(ln["x0"])
+                xs.append(ln["x1"])
+        q["x0"] = max(0.0, min(xs) - 12) if xs else 0.0
+        q["x1"] = max(xs) + 12 if xs else None
     kept = []
     for q in questions:
         total = sum(b - t for _, t, b in q["pages"])
@@ -160,8 +180,11 @@ def crop_question(page_images, question, zoom: float):
     for pno, top, bottom in question["pages"]:
         img = page_images[pno]
         w, h = img.size
-        box = (0, max(0, int(top * zoom)),
-               w, min(h, int(bottom * zoom)))
+        x0 = max(0, int((question.get("x0") or 0) * zoom))
+        x1 = question.get("x1")
+        box = (x0, max(0, int(top * zoom)),
+               min(w, int(x1 * zoom)) if x1 else w,
+               min(h, int(bottom * zoom)))
         if box[3] <= box[1]:
             continue
         buf = BytesIO()
