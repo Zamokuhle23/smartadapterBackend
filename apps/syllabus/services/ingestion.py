@@ -384,6 +384,7 @@ def process_document(document) -> int:
         vectors = embedder.embed_texts(texts) if texts else []
         DocumentChunk.objects.filter(document=document).delete()
         for i, (page_no, piece) in enumerate(pieces):
+            vec = vectors[i] if i < len(vectors) else None
             DocumentChunk.objects.create(
                 syllabus=document.syllabus,
                 document=document,
@@ -391,7 +392,10 @@ def process_document(document) -> int:
                 ordinal=i,
                 page_number=page_no or None,
                 text=piece,
-                embedding=vectors[i] if i < len(vectors) else None,
+                embedding=vec,
+                # pgvector search reads this column: without it the chunk
+                # is invisible to retrieval on PostgreSQL.
+                embedding_vec=vec if _pgvector_available() else None,
             )
         _store_document_figures(document)
         document.chunk_count = len(texts)
@@ -404,6 +408,13 @@ def process_document(document) -> int:
         document.error = str(exc)
         document.save(update_fields=["status", "error"])
         raise
+
+
+def _pgvector_available() -> bool:
+    """True on PostgreSQL (the only backend with the vector column)."""
+    from django.db import connection
+
+    return connection.vendor == "postgresql"
 
 
 def _store_document_figures(document) -> int:
