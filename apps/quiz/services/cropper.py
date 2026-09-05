@@ -247,6 +247,10 @@ def redact_zones(page):
     W, H = page.rect.width, page.rect.height
     words = page.get_text("words")
 
+    # Top admin strip (barcode, candidate/centre boxes, page folio) is
+    # furniture on every paper, raster or vector, so always hide it.
+    zones.append([0.0, 0.0, float(W), float(H * 0.075)])
+
     def band_text(top, bottom):
         return " ".join(
             w[4] for w in words if w[1] >= top and w[3] <= bottom).lower()
