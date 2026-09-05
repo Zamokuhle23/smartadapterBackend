@@ -290,6 +290,7 @@ def part_kind(page, top: float, bottom: float) -> str:
 ADMIN_LINE = re.compile(
     r"council|certificate|eswatini|examinations|specimen|turn over|"
     r"candidate|centre number|confidential|printed pages|blank page|"
+    r"for examiner|examiner's use|^use$|^umbuto|^sekukonkhe|"
     r"^\*\s*\d[\d\s]*\*$",
     re.IGNORECASE)
 
