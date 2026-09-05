@@ -6,7 +6,12 @@ from django.db import models
 
 from apps.progress.models import MasteryEvent, MasteryRecord
 from apps.progress.services.bkt import update_mastery
-from apps.syllabus.models import Enrollment, LearningObjective, Subject
+from apps.syllabus.models import (
+    Enrollment,
+    LearningObjective,
+    Subject,
+    SyllabusDocument,
+)
 
 from .models import CropAttempt, ExamSession, PageTopic, PaperAttempt, QuestionAnchor, QuestionCrop, QuizAttempt, QuizQuestion
 from .services.generator import (
@@ -872,3 +877,71 @@ def _anchor_label(anchor) -> str:
     topic = PageTopic.objects.filter(
         document=anchor.document, page_number=anchor.page_number).first()
     return topic.label if topic else ""
+
+
+class PracticePagesView(APIView):
+    """GET ?subject_id=N&topics=a,b&limit=20 -> page queue for practice.
+
+    Distinct (document, page) pairs carrying at least one anchor, filtered
+    to PageTopic labels when given. Practice walks the queue like a paper;
+    the app renders each page with the shared viewer.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            subject = Subject.objects.get(pk=request.query_params.get("subject_id"))
+        except Subject.DoesNotExist:
+            return Response({"detail": "Unknown subject_id"}, status=400)
+        if Enrollment.objects.filter(student=request.user, subject=subject).first() is None:
+            return Response(
+                {"detail": "Enroll in this subject before practising"},
+                status=403,
+            )
+        topics = [t.strip() for t in
+                  (request.query_params.get("topics") or "").split(",")
+                  if t.strip()]
+        try:
+            limit = max(1, min(50, int(request.query_params.get("limit", 20))))
+        except (TypeError, ValueError):
+            limit = 20
+        pages = (QuestionAnchor.objects.filter(document__subject=subject)
+                 .values("document_id", "page_number").distinct())
+        if topics:
+            from django.db.models import F as _F
+            from django.db.models import Q as _Q
+
+            label_q = _Q()
+            for label in topics:
+                label_q |= _Q(document__page_topics__label__iexact=label,
+                              document__page_topics__page_number=_F("page_number"))
+            pages = pages.filter(label_q)
+        rows = list(pages.order_by("?")[:limit])
+        if not rows:
+            return Response({"detail": "no_questions"}, status=404)
+        docs = {d.id: d for d in SyllabusDocument.objects.filter(
+            id__in={r["document_id"] for r in rows}).select_related("subject")}
+        out = []
+        for r in rows:
+            doc = docs.get(r["document_id"])
+            if doc is None:
+                continue
+            out.append({
+                "doc_id": doc.id,
+                "page_number": r["page_number"],
+                "label": self._page_label(doc, r["page_number"]),
+                "pdf_url": (request.build_absolute_uri(doc.file.url)
+                            if doc.file else None),
+                "paper_label": (f"Paper {doc.paper_number}"
+                                if doc.paper_number else "Past paper"),
+                "source_year": doc.year,
+                "source": doc.source,
+            })
+        return Response({"pages": out})
+
+    @staticmethod
+    def _page_label(doc, page_number) -> str:
+        topic = PageTopic.objects.filter(
+            document=doc, page_number=page_number).first()
+        return topic.label if topic else ""

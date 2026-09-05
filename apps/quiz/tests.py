@@ -315,6 +315,33 @@ class NextGrowsBankTests(TestCase):
         # only q1 in bank and it is excluded -> 404, app then generates fresh.
         self.assertEqual(response.status_code, 404)
 
+    def test_practice_pages_filtered_by_topic(self):
+        from apps.quiz.models import PageTopic, QuestionAnchor
+        from apps.syllabus.models import SyllabusDocument
+
+        doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP 2024",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE, year=2024, paper_number=2)
+        PageTopic.objects.create(document=doc, page_number=7,
+                                 label="Pythagoras theorem", confidence=0.9)
+        PageTopic.objects.create(document=doc, page_number=9,
+                                 label="Quadratics", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=doc, qid="4a", page_number=7,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=doc, qid="5", page_number=9,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        response = self.client.get(
+            f"/api/quiz/practice/pages/?subject_id={self.subject.id}"
+            "&topics=Quadratics")
+        self.assertEqual(response.status_code, 200)
+        pages = response.json()["pages"]
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["page_number"], 9)
+        self.assertEqual(pages[0]["doc_id"], doc.id)
+
 
 class QueryOverrideTests(TestCase):
     def setUp(self):

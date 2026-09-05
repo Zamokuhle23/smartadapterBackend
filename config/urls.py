@@ -19,6 +19,7 @@ from apps.quiz.api import (
     PageTopicsView,
     PaperAnchorsView,
     PaperAnswerView,
+    PracticePagesView,
     StartExamView,
 )
 from apps.syllabus.api import (
@@ -65,6 +66,8 @@ urlpatterns = [
          name="paper-answer"),
     path("api/quiz/anchors/next/", NextAnchorView.as_view(),
          name="anchors-next"),
+    path("api/quiz/practice/pages/", PracticePagesView.as_view(),
+         name="practice-pages"),
     path("api/quiz/page-topics/", PageTopicsView.as_view(),
          name="page-topics"),
     path("api/quiz/exam/start/", StartExamView.as_view(), name="exam-start"),
