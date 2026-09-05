@@ -195,6 +195,33 @@ class PaperAttempt(models.Model):
         ordering = ("-created_at",)
 
 
+class PageTopic(models.Model):
+    """One subtopic label per document page: the pick-list for practice.
+
+    Labels are free text (syllabus has no topic tree on prod yet); when trees
+    exist the label can be matched to a Topic row. One LLM call per page,
+    cached forever; confidence < 0.7 lands in review.
+    """
+
+    document = models.ForeignKey(
+        SyllabusDocument, on_delete=models.CASCADE, related_name="page_topics")
+    page_number = models.PositiveSmallIntegerField()
+    label = models.CharField(max_length=120)
+    confidence = models.FloatField(default=0.0)
+
+    class Meta:
+        ordering = ("document_id", "page_number")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["document", "page_number"],
+                name="unique_topic_per_page",
+            )
+        ]
+
+    def __str__(self):
+        return f"PageTopic<{self.document_id} p{self.page_number}: {self.label}>"
+
+
 class ExamBlueprint(models.Model):
     """
     Cached exam structure for one subject + paper: topic weightings, question

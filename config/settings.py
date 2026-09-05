@@ -211,6 +211,14 @@ LLM_MODEL = os.getenv("LLM_MODEL", "stealth/ox-alpha")
 # Vision-capable model for grading hand-drawn answers (image_url parts).
 # Defaults to the main model; override when it cannot see images.
 LLM_VISION_MODEL = os.getenv("LLM_VISION_MODEL", "") or LLM_MODEL
+# Bulk tagging channel (page topics): free tier only. Primary is Muse Spark
+# via OpenCode Zen (contributor tier trains on prompts: public corpus text
+# only, never student data); fallback is a free OpenRouter chat model.
+OPENCODE_API_KEY = os.getenv("OPENCODE_API_KEY", "")
+OPENCODE_BASE_URL = os.getenv("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1")
+TAGGING_ZEN_MODEL = os.getenv("TAGGING_ZEN_MODEL",
+                              "muse-spark-1.3-contributor-free")
+TAGGING_MODEL = os.getenv("TAGGING_MODEL", "minimax/minimax-m3:free")
 
 # Separate provider/model for high-volume tutor CHAT (cheap by default) vs.
 # the primary provider used for question generation + grading (quality-critical).

@@ -779,6 +779,80 @@ class PaperAnswerTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class TaggingTests(TestCase):
+    """Free-tier tagging: Zen first, OpenRouter fallback, then raise."""
+
+    def test_falls_back_when_zen_blocked(self):
+        from unittest.mock import patch
+
+        from apps.rag.services import tagging
+        from apps.rag.services.tagging import TaggingError
+
+        with patch.object(tagging, "_zen_chat",
+                          side_effect=TaggingError("403")), patch(
+            "apps.rag.services.llm.get_chat_provider") as provider:
+            provider.return_value.chat.return_value = "fallback-ok"
+            self.assertEqual(tagging.tagging_chat("hi"), "fallback-ok")
+
+    def test_raises_when_all_fail(self):
+        from unittest.mock import patch
+
+        from apps.rag.services import tagging
+        from apps.rag.services.tagging import TaggingError
+
+        with patch.object(tagging, "_zen_chat",
+                          side_effect=TaggingError("403")), patch(
+            "apps.rag.services.llm.get_chat_provider",
+            side_effect=Exception("no key")):
+            with self.assertRaises(TaggingError):
+                tagging.tagging_chat("hi")
+
+
+def _raw_chunk(syllabus_id, doc_id, subject_id, ordinal, page, text):
+    """Insert a chunk without touching the pg-only embedding_vec column."""
+    from django.db import connection
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "INSERT INTO rag_documentchunk "
+            "(syllabus_id, document_id, subject_id, ordinal, page_number,"
+            " text) VALUES (%s, %s, %s, %s, %s, %s)",
+            [syllabus_id, doc_id, subject_id, ordinal, page, text])
+
+
+class TagPagesTests(TestCase):
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+
+    def test_tags_pages_and_skips_done(self):
+        from unittest.mock import patch
+
+        from django.core.management import call_command
+
+        from apps.quiz.models import PageTopic
+        from apps.syllabus.models import SyllabusDocument
+
+        doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP 2024",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE, year=2024, paper_number=2)
+        _raw_chunk(self.syllabus.id, doc.id, self.subject.id, 0, 1,
+                   "triangle ABC right-angled")
+        _raw_chunk(self.syllabus.id, doc.id, self.subject.id, 1, 2,
+                   "solve quadratic equations")
+        payloads = iter([
+            '{"subtopic": "Pythagoras theorem", "confidence": 0.9}',
+            '{"subtopic": "Quadratics", "confidence": 0.8}',
+        ])
+        with patch("apps.quiz.management.commands.tag_pages.tagging_chat",
+                   side_effect=lambda prompt: next(payloads)):
+            call_command("tag_pages", "--subject-code", self.subject.code)
+            call_command("tag_pages", "--subject-code", self.subject.code)
+        labels = sorted(PageTopic.objects.filter(document=doc).values_list(
+            "label", flat=True))
+        self.assertEqual(labels, ["Pythagoras theorem", "Quadratics"])
+
+
 class GenerationRetryTests(TestCase):
     """An all-bare batch gets one strict retry before surfacing an error."""
 
