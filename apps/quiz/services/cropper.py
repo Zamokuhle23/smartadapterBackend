@@ -287,6 +287,13 @@ def part_kind(page, top: float, bottom: float) -> str:
     return "text"
 
 
+ADMIN_LINE = re.compile(
+    r"council|certificate|eswatini|examinations|specimen|turn over|"
+    r"candidate|centre number|confidential|printed pages|blank page|"
+    r"^\*\s*\d[\d\s]*\*$",
+    re.IGNORECASE)
+
+
 def content_crop(page):
     """Per-page margin fractions [left, top, right, bottom] the app can cut.
 
@@ -306,15 +313,41 @@ def content_crop(page):
             continue
         if MARGIN_WORDS.search(t):
             continue
+        if w[3] < H * 0.05:
+            continue  # barcode row / top folio sliver
+        if ADMIN_LINE.search(t):
+            continue  # council/candidate/instruction header furniture
         boxes.append(pymupdf.Rect(w[0], w[1], w[2], w[3]))
     try:
         for b in page.get_text("dict").get("blocks", ()):
             if b.get("type") == 1:
-                boxes.append(pymupdf.Rect(b["bbox"]))
+                r = pymupdf.Rect(b["bbox"])
+                if r.y0 < H * 0.05:
+                    continue  # top-strip logo/furniture image
+                boxes.append(r)
     except Exception:  # noqa: BLE001 - words alone still give a box
         pass
+    # Vector figures (photos-as-vectors, graphs, answer rules) bleed past
+    # text: include their extents, minus frames, corner marks and bands.
+    try:
+        for d in page.get_drawings():
+            r = d.get("rect")
+            if r is None:
+                continue
+            r = pymupdf.Rect(r)
+            if r.width > W * 0.8 or r.height > H * 0.8:
+                continue  # page/content frame
+            if r.x1 < 12 or r.x0 > W - 12:
+                continue  # corner crop marks
+            if r.y1 < H * 0.08 or r.y0 > H * 0.94:
+                continue  # admin bands
+            if (r.x1 - r.x0) <= 0 or (r.y1 - r.y0) <= 0:
+                continue
+            boxes.append(r)
+    except Exception:  # noqa: BLE001
+        pass
     kept = [b for b in boxes
-            if b.y0 > H * 0.08 and b.y1 < H * 0.94
+            if b.y1 < H * 0.94
             and b.x1 > 12 and b.x0 < W - 12
             and (b.x1 - b.x0) > 0 and (b.y1 - b.y0) > 0]
     if not kept:
