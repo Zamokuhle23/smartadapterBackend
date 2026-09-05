@@ -472,7 +472,11 @@ class NextCropView(APIView):
         exclude_ids = _parse_id_list(request.query_params.getlist("exclude"))
         qs = QuestionCrop.objects.filter(
             document__subject=subject,
-            status__in=(QuestionCrop.Status.AUTO, QuestionCrop.Status.APPROVED),
+            # NEEDS_QC crops are still real exam content (boundary review
+            # pending); the QC flag gates trust, not serving.
+            status__in=(QuestionCrop.Status.AUTO,
+                        QuestionCrop.Status.APPROVED,
+                        QuestionCrop.Status.NEEDS_QC),
         ).exclude(
             # Unkeyed MCQ crops are show-only (no correct answer to mark
             # against); structured ones grade by LLM either way.
