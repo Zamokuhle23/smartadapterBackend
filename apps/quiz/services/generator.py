@@ -357,7 +357,7 @@ def _build_context(chunks) -> str:
 
 def generate_questions(subject, count: int = 3, difficulty: int | None = None,
                        objective=None, tier: str = "", topic_ids=None,
-                       objective_ids=None) -> list[QuizQuestion]:
+                       objective_ids=None, query: str | None = None) -> list[QuizQuestion]:
     """Adaptive practice questions: past-paper variations first.
 
     Selection is scoped to the objectives/topics the student has chosen:
@@ -365,6 +365,8 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
         so a student who has only learned part of a topic isn't asked the rest).
       - topic_ids: any objective within these topics.
     Questions are spread across the selection so one topic isn't over-served.
+    query overrides the retrieval query (e.g. to aim generation at
+    diagram-rich chunks for figure-bearing questions).
     """
     count = max(1, min(int(count), 10))
 
@@ -391,11 +393,12 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
         objective = topic_objs[0] if topic_objs else None
 
     if objective:
-        query = (
+        derived = (
             " ".join(o.statement for o in topic_objs[:4]) if topic_objs else objective.statement
         )
     else:
-        query = f"{subject.name} past exam questions typical examination items"
+        derived = f"{subject.name} past exam questions typical examination items"
+    query = query or derived
 
     raw_chunks = retrieve(subject.syllabus, query, k=16, subject=subject)
     raw_chunks = _filter_chunks_by_tier(raw_chunks, tier)

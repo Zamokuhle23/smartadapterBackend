@@ -29,6 +29,9 @@ class Command(BaseCommand):
         parser.add_argument("--difficulty", type=int, default=2)
         parser.add_argument("--topic-ids", default="",
                             help="Comma-separated topic ids to scope to")
+        parser.add_argument("--query", default="",
+                            help="Override the retrieval query (e.g. aim at "
+                                 "diagram-rich chunks for figure questions)")
 
     def handle(self, *args, **options):
         try:
@@ -51,6 +54,7 @@ class Command(BaseCommand):
                     count=min(batch, total - created),
                     difficulty=options["difficulty"],
                     topic_ids=topic_ids,
+                    query=options["query"] or None,
                 )
             except QuizGenerationError as exc:
                 self.stderr.write(f"batch failed ({exc}); continuing")

@@ -316,6 +316,31 @@ class NextGrowsBankTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class QueryOverrideTests(TestCase):
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+
+    def test_query_override_reaches_retriever(self):
+        from unittest.mock import patch
+
+        from apps.quiz.services.generator import generate_questions
+
+        seen = {}
+
+        def fake_retrieve(syllabus, query, **kwargs):
+            seen["query"] = query
+            return []
+
+        with patch("apps.rag.services.llm.get_chat_provider",
+                   return_value=FakeProvider()), patch(
+            "apps.quiz.services.generator.retrieve",
+            side_effect=fake_retrieve,
+        ):
+            generate_questions(self.subject, count=1,
+                               query="triangle diagram right-angled")
+        self.assertIn("triangle diagram", seen.get("query", ""))
+
+
 class GenerationRetryTests(TestCase):
     """An all-bare batch gets one strict retry before surfacing an error."""
 
