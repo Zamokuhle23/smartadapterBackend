@@ -249,7 +249,7 @@ def redact_zones(page):
 
     # Top admin strip (barcode, candidate/centre boxes, page folio) is
     # furniture on every paper, raster or vector, so always hide it.
-    zones.append([0.0, 0.0, float(W), float(H * 0.075)])
+    zones.append([0.0, 0.0, float(W), float(H * 0.08)])
 
     def band_text(top, bottom):
         return " ".join(
