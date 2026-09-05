@@ -78,9 +78,25 @@ def _fallback_chat(prompt_text: str) -> str:
         raise TaggingError(f"Fallback tagging failed: {exc}") from exc
 
 
-def tagging_chat(prompt_text: str) -> str:
-    """Tagging completion, trying free providers in order."""
-    try:
-        return _zen_chat(prompt_text)
-    except TaggingError:
-        return _fallback_chat(prompt_text)
+def tagging_chat(prompt_text: str, attempts: int = 4) -> str:
+    """Tagging completion, trying free providers in order.
+
+    Retries with backoff: free tiers rate-limit bulk runs, and a dropped
+    page would stay untagged (tag_pages only retries untagged pages on a
+    fresh run, so surviving transient 429s here matters).
+    """
+    import time
+
+    last: TaggingError | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            return _zen_chat(prompt_text)
+        except TaggingError as exc:
+            last = exc
+            try:
+                return _fallback_chat(prompt_text)
+            except TaggingError as exc2:
+                last = exc2
+        if attempt < attempts - 1:
+            time.sleep(5 * (attempt + 1))
+    raise last if last else TaggingError("tagging failed")

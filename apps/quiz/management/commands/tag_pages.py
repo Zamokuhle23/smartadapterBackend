@@ -70,6 +70,9 @@ class Command(BaseCommand):
                 done += 1
                 if done % 10 == 0:
                     self.stdout.write(f"  {done} pages tagged")
+                # Gentle pace for free-tier rate limits.
+                import time as _time
+                _time.sleep(3.0)
             if options["limit_pages"] and done >= options["limit_pages"]:
                 break
         self.stdout.write(self.style.SUCCESS(
