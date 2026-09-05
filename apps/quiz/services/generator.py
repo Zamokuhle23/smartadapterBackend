@@ -1119,7 +1119,12 @@ def find_mark_scheme(subject, year, paper_number):
 
 
 def ms_excerpt_for(ms_doc, q_number: str) -> str:
-    """Slice ~2000 chars of mark-scheme text around the question number."""
+    """Slice ~2000 chars of mark-scheme text around the question number.
+
+    Skips bare folio lines ("1", "2" alone on a line) and prefers the
+    match whose following text looks like scheme content (marks, accept,
+    award, allow, ignore). Falls back to the first content-line match.
+    """
     from apps.rag.models import DocumentChunk
 
     texts = list(DocumentChunk.objects.filter(
@@ -1127,10 +1132,24 @@ def ms_excerpt_for(ms_doc, q_number: str) -> str:
     blob = "\n".join(texts)
     if not blob.strip():
         return ""
-    m = re.search(r"(?mi)^\s*" + re.escape(q_number) + r"\b", blob)
-    if not m:
+    pattern = re.compile(r"(?m)^\s*" + re.escape(q_number) + r"\b")
+    best = None
+    first_content = None
+    for m in pattern.finditer(blob):
+        line_end = blob.find("\n", m.start())
+        rest = blob[m.start():line_end if line_end != -1 else len(blob)]
+        if len(rest.strip()) <= len(q_number) + 1:
+            continue  # bare folio number, not a question start
+        if first_content is None:
+            first_content = m.start()
+        window = blob[m.start():m.start() + 400].lower()
+        if re.search(r"mark|accept|award|allow|ignore|reject|\[\d", window):
+            best = m.start()
+            break
+    start = best if best is not None else first_content
+    if start is None:
         return ""
-    return blob[max(0, m.start() - 200):m.start() + 2000]
+    return blob[start:start + 2200]
 
 
 def extract_keys(question_text: str, q_number: str, ms_excerpt: str):
