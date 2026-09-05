@@ -592,7 +592,8 @@ class PaperAnchorsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, doc_id):
-        from apps.quiz.services.cropper import content_crop, redact_zones
+        from apps.quiz.services.cropper import (
+            answer_lines, content_crop, redact_zones)
         from apps.syllabus.models import SyllabusDocument
 
         try:
@@ -613,11 +614,21 @@ class PaperAnchorsView(APIView):
         with pdf:
             for page in pdf:
                 pno = page.number + 1
+                try:
+                    drawings = page.get_drawings()
+                except Exception:  # noqa: BLE001
+                    drawings = []
+                page_anchors = [a for a in anchors
+                                if a["page_number"] == pno]
+                for a in page_anchors:
+                    try:
+                        a["lines"] = answer_lines(page, a["bbox"], drawings)
+                    except Exception:  # noqa: BLE001
+                        a["lines"] = []
                 pages[pno] = {
                     "width": float(page.rect.width),
                     "height": float(page.rect.height),
-                    "questions": [a for a in anchors
-                                  if a["page_number"] == pno],
+                    "questions": page_anchors,
                     "redact": redact_zones(page),
                     "crop": content_crop(page),
                 }

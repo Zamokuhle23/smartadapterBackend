@@ -295,6 +295,49 @@ ADMIN_LINE = re.compile(
     re.IGNORECASE)
 
 
+def answer_lines(page, bbox, drawings=None):
+    """Y-centres (PDF points) of ruled answer lines inside an anchor bbox.
+
+    Long thin horizontal rules in the lower part of the box are the
+    printed answer lines students write on. Table borders and figure
+    axes rarely satisfy width + position together; the app falls back
+    to plain display when no lines are found.
+    """
+    import pymupdf
+
+    x0, top, x1, bottom = (float(v) for v in bbox[:4])
+    width = max(1.0, x1 - x0)
+    height = max(1.0, bottom - top)
+    if drawings is None:
+        try:
+            drawings = page.get_drawings()
+        except Exception:  # noqa: BLE001
+            return []
+    lines = []
+    for d in drawings:
+        r = d.get("rect")
+        if r is None:
+            continue
+        r = pymupdf.Rect(r)
+        w, h = r.width, r.height
+        if h <= 0 or w < h * 4 or h > 2.5:
+            continue  # not a horizontal rule
+        if w < width * 0.4:
+            continue  # short rule: table cell, underline, tick
+        cy = (r.y0 + r.y1) / 2
+        if not (top + height * 0.25 < cy < bottom):
+            continue  # stem area, not the answer space
+        lines.append(round(cy, 1))
+    lines.sort()
+    merged = []
+    for y in lines:
+        if merged and y - merged[-1] < 6:
+            merged[-1] = round((merged[-1] + y) / 2, 1)
+        else:
+            merged.append(y)
+    return merged
+
+
 def content_crop(page):
     """Per-page margin fractions [left, top, right, bottom] the app can cut.
 
