@@ -82,3 +82,21 @@ class DocumentFigure(models.Model):
 
     def __str__(self):
         return self.stable_key or f"Figure<doc={self.document_id} p{self.page_number}:{self.ordinal}>"
+
+    def save(self, *args, **kwargs):
+        if not self.stable_key:
+            from apps.syllabus.services.figure_keys import figure_key_for
+
+            try:
+                base = figure_key_for(self.document, self.page_number,
+                                      self.ordinal)
+            except Exception:  # noqa: BLE001 - never block a save on keys
+                base = (f"FIG-{self.document_id or 0}"
+                        f"-p{self.page_number or 0}-f{self.ordinal}")
+            key, i = base, 2
+            while (DocumentFigure.objects.filter(stable_key=key)
+                   .exclude(pk=self.pk).exists()):
+                key = f"{base}-{i}"
+                i += 1
+            self.stable_key = key
+        super().save(*args, **kwargs)

@@ -147,6 +147,8 @@ def _iou(a, b) -> float:
 _FURNITURE_WORDS = (
     "examiner", "candidate", "centre number", "candidate number",
     "signature", "examinations council of eswatini",
+    "do not write in this margin", "do not write in this space",
+    "blank page",
 )
 
 

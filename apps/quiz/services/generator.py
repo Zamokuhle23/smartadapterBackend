@@ -778,15 +778,18 @@ def _attach_figures(question, chunks):
             wanted.add((chunk.document_id, chunk.page_number))
     if not wanted:
         return
-    figure_ids = []
+    # Attach only from pages holding exactly ONE figure. On multi-figure
+    # pages we cannot tell which figure the text describes, and a wrongly
+    # attached image is worse than ASCII repair.
+    single = []
     for document_id, page_number in wanted:
-        figure_ids.extend(
-            DocumentFigure.objects.filter(
-                document_id=document_id, page_number=page_number
-            ).values_list("id", flat=True)
-        )
-    if figure_ids:
-        question.figures.set(figure_ids[:6])  # cap at ~6 figures per question
+        ids = list(DocumentFigure.objects.filter(
+            document_id=document_id, page_number=page_number
+        ).values_list("id", flat=True))
+        if len(ids) == 1:
+            single.extend(ids)
+    if single:
+        question.figures.set(single[:6])
 
 
 # --------------------------------------------------------------------------

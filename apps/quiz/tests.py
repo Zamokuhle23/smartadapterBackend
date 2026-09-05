@@ -881,6 +881,20 @@ class FigureAttachmentTests(TestCase):
         _attach_figures(q, [bare])
         self.assertEqual(q.figures.count(), 0)
 
+    def test_multi_figure_page_attaches_nothing(self):
+        from apps.quiz.services.generator import _attach_figures
+        from apps.quiz.models import QuizQuestion
+        from apps.rag.models import DocumentFigure
+        from django.core.files.base import ContentFile
+
+        _doc, _fig, chunk = self._make_figured_chunk()
+        second = DocumentFigure(document=chunk.document, page_number=3, ordinal=1)
+        second.image.save("u.png", ContentFile(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50),
+                          save=True)
+        q = QuizQuestion.objects.create(subject=self.subject, format="structured", question_text="Label A, B, C.", marks=3)
+        _attach_figures(q, [chunk])
+        self.assertEqual(q.figures.count(), 0)
+
     def test_figure_flag_attaches_without_adapted(self):
         from apps.quiz.services.generator import _question_from_item
         from apps.quiz.models import QuizQuestion

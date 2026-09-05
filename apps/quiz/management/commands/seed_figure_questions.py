@@ -30,11 +30,17 @@ class Command(BaseCommand):
         except Subject.DoesNotExist:
             raise CommandError(
                 f"No subject with code {options['subject_code']}")
-        pages = sorted(set(
+        from django.db.models import Count
+
+        single_pages = (
             DocumentFigure.objects.filter(
                 document__subject=subject,
                 document__doc_type=SyllabusDocument.DocType.PAST_PAPER,
-            ).values_list("document_id", "page_number")))
+            ).values("document_id", "page_number").annotate(
+                n=Count("id")).filter(n=1))
+        pages = sorted((r["document_id"], r["page_number"]) for r in single_pages)
+        # Only single-figure pages: with several figures we cannot tell
+        # which one the text will describe.
         if not pages:
             raise CommandError("No figured past-paper pages for this subject")
         random.shuffle(pages)
