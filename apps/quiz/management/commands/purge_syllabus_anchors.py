@@ -36,13 +36,27 @@ SYL_KINDS = re.compile(
     r"appendix \d",
     re.IGNORECASE)
 HAS_MARKS = re.compile(
-    r"\[\d{1,2}\]|\(\d{1,2} marks?\)|Fig\.|Total|Answer all|"
-    r"Turn over|CANDIDATE NUMBER|CENTRE NUMBER")
+    r"\[\d{1,2}\]|\(\d{1,2} marks?\)|Fig\.|\[Total|Total\s*(marks|:)|"
+    r"Answer all|Turn over|CANDIDATE NUMBER|CENTRE NUMBER",
+    re.IGNORECASE)
 Q_MARK = re.compile(
     r"\[\d{1,2}\]|\(\d{1,2} marks?\)|\[Total|Fig\.|Turn over|"
     r"CANDIDATE NUMBER|CENTRE NUMBER|Answer all|"
     r"\.{10,}|_{10,}|2 hours|1 hour",
     re.IGNORECASE)
+
+
+def _syllabus_subject(full: str, current: str) -> str | None:
+    """Subject code from a 'NAME Syllabus NNNN' header, if unambiguous."""
+    from apps.syllabus.services.subject_map import (
+        EGCSE_SUBJECT_NAMES_BY_CODE)
+    m = re.search(r"([A-Za-z &'\-.]{4,50}?)\s+[Ss]yllabus\s+(\d{4})\b", full)
+    if m and m.group(2) in EGCSE_SUBJECT_NAMES_BY_CODE:
+        return m.group(2)
+    by_name = {v.lower(): k for k, v in EGCSE_SUBJECT_NAMES_BY_CODE.items()}
+    if m and m.group(1).strip().lower() in by_name:
+        return by_name[m.group(1).strip().lower()]
+    return None
 
 
 class Command(BaseCommand):
@@ -140,7 +154,15 @@ class Command(BaseCommand):
             if not apply:
                 continue
             doc.doc_type = SyllabusDocument.DocType.SYLLABUS
-            doc.save(update_fields=["doc_type"])
+            subj = _syllabus_subject(full, doc.subject.code)
+            if subj is not None and subj != doc.subject.code:
+                from apps.syllabus.models import Subject as _Subject
+                row = _Subject.objects.filter(code=subj).first()
+                if row is not None:
+                    self.stdout.write(
+                        f"    subject {doc.subject.code} -> {subj}")
+                    doc.subject = row
+            doc.save()
             QuestionAnchor.objects.filter(document=doc).delete()
             PageTopic.objects.filter(document=doc).delete()
         self.stdout.write(self.style.SUCCESS(
