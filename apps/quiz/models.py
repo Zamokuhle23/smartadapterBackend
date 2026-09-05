@@ -184,6 +184,8 @@ class PaperAttempt(models.Model):
     anchor = models.ForeignKey(QuestionAnchor, on_delete=models.CASCADE,
                                related_name="attempts")
     answer_text = models.TextField(blank=True)
+    drawing = models.ImageField(upload_to="paper_drawings/%Y/%m/",
+                                null=True, blank=True)
     awarded_marks = models.FloatField(null=True, blank=True)
     correct = models.BooleanField(default=False)
     latency_ms = models.PositiveIntegerField(null=True, blank=True)

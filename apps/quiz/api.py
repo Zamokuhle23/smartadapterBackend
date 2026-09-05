@@ -14,6 +14,7 @@ from .services.generator import (
     extract_keys,
     find_mark_scheme,
     generate_questions,
+    grade_drawing,
     grade_structured_answer,
     grade_text,
     ms_excerpt_for,
@@ -625,11 +626,12 @@ class PaperAnchorsView(APIView):
 
 
 class PaperAnswerView(APIView):
-    """POST {doc_id, qid, answer_text?, selected_index?, latency_ms?}.
+    """POST {doc_id, qid, answer_text?, selected_index?, drawing?, latency_ms?}.
 
     Grades one tapped paper anchor: text answers via the LLM against the
     mark scheme (resolved inline once, cached on the anchor); A-D letters
-    against the cached correct_index. History only, never BKT.
+    against the cached correct_index; hand drawings via vision grading.
+    History only, never BKT. drawing is a base64 PNG (max ~2 MB).
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -664,6 +666,7 @@ class PaperAnswerView(APIView):
         awarded = max_marks = None
         feedback = ""
         correct = False
+        drawing_b64 = ""
         selected = request.data.get("selected_index")
         if selected is not None and anchor.kind != "drawing":
             if anchor.correct_index is None:
@@ -681,20 +684,33 @@ class PaperAnswerView(APIView):
             awarded = float(max_marks) if correct else 0.0
         else:
             answer_text = (request.data.get("answer_text") or "").strip()
-            if not answer_text:
+            drawing_b64 = request.data.get("drawing") or ""
+            if isinstance(drawing_b64, str) and drawing_b64.startswith("data:"):
+                drawing_b64 = drawing_b64.split(",", 1)[-1]
+            if len(drawing_b64) > 3_000_000:
+                return Response({"detail": "drawing too large"}, status=400)
+            if not answer_text and not drawing_b64:
                 return Response({"detail": "answer_text required"}, status=400)
             try:
-                awarded, max_marks, feedback = grade_text(
-                    question_text=text or f"Paper Q{anchor.qid}",
-                    guidance=anchor.marking_guidance or "(none supplied)",
-                    marks=marks,
-                    answer_text=answer_text,
-                )
+                if drawing_b64:
+                    awarded, max_marks, feedback = grade_drawing(
+                        question_text=text or f"Paper Q{anchor.qid}",
+                        guidance=anchor.marking_guidance or "(none supplied)",
+                        marks=marks,
+                        image_b64=drawing_b64,
+                    )
+                else:
+                    awarded, max_marks, feedback = grade_text(
+                        question_text=text or f"Paper Q{anchor.qid}",
+                        guidance=anchor.marking_guidance or "(none supplied)",
+                        marks=marks,
+                        answer_text=answer_text,
+                    )
             except QuizGenerationError as exc:
                 return Response({"detail": str(exc)}, status=503)
             correct = awarded >= max_marks * 0.5
 
-        PaperAttempt.objects.create(
+        attempt = PaperAttempt.objects.create(
             student=request.user,
             anchor=anchor,
             answer_text=request.data.get("answer_text") or "",
@@ -702,6 +718,16 @@ class PaperAnswerView(APIView):
             correct=correct,
             latency_ms=latency_ms,
         )
+        if drawing_b64:
+            from django.core.files.base import ContentFile
+            import base64
+
+            try:
+                attempt.drawing.save(
+                    f"{anchor.qid}.png",
+                    ContentFile(base64.b64decode(drawing_b64)), save=True)
+            except Exception:  # noqa: BLE001 - grade stands, image optional
+                pass
         return Response(
             {
                 "correct": correct,

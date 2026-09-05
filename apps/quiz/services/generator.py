@@ -1010,6 +1010,45 @@ def grade_text(question_text: str, guidance: str, marks: int,
     return awarded, max_marks, feedback
 
 
+DRAW_GRADE_PROMPT = """You are an ECESWA examiner marking a student's HAND-DRAWN answer.
+
+QUESTION ({marks} marks):
+{question}
+
+MARKING GUIDANCE (authoritative):
+{guidance}
+
+The attached image shows the exam figure with the student's drawing on it.
+Judge ONLY what is drawn: correct construction/shading/labelling earns marks
+per the guidance; an empty or irrelevant drawing earns 0. Return ONLY valid
+JSON, no fences: {{"awarded": <number>, "feedback": "<specific feedback>"}}"""
+
+
+def grade_drawing(question_text: str, guidance: str, marks: int,
+                  image_b64: str) -> tuple[float, float, str]:
+    """Vision-grade a hand drawing. Returns (awarded, max, feedback)."""
+    from apps.rag.services.llm import get_chat_provider
+
+    max_marks = float(marks or 1)
+    try:
+        raw = get_chat_provider().chat_with_images(
+            DRAW_GRADE_PROMPT.format(
+                marks=marks or 1,
+                question=question_text,
+                guidance=guidance or "(none supplied)",
+            ),
+            [image_b64],
+        )
+        result = _extract_json_object(raw)
+        awarded = float(result.get("awarded", 0))
+    except Exception:  # noqa: BLE001 - vision unavailable or bad output
+        raise QuizGenerationError(
+            "Drawing grading is unavailable right now - try again later.")
+    awarded = max(0.0, min(max_marks, awarded))
+    feedback = str(result.get("feedback", ""))[:2000]
+    return awarded, max_marks, feedback
+
+
 KEY_PROMPT = """You link an exam question to its mark scheme.
 
 QUESTION:

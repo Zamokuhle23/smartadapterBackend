@@ -18,6 +18,10 @@ class BaseChatProvider:
     def chat(self, messages: list[dict]) -> str:
         raise NotImplementedError
 
+    def chat_with_images(self, text: str, images_b64: list[str]) -> str:
+        """Vision grading: text prompt + PNG images (base64, no prefix)."""
+        raise NotImplementedError("Vision not supported by this provider")
+
 
 class OpenAIChatProvider(BaseChatProvider):
     def __init__(self, model: str | None = None, api_key: str | None = None,
@@ -47,6 +51,33 @@ class OpenAIChatProvider(BaseChatProvider):
             method="POST",
         )
         with http_request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data["choices"][0]["message"]["content"]
+
+    def chat_with_images(self, text: str, images_b64: list[str]) -> str:
+        model = getattr(settings, "LLM_VISION_MODEL", "") or self.model
+        content = [{"type": "text", "text": text}]
+        for b64 in images_b64[:3]:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}"},
+            })
+        payload = {"model": model, "messages": [{"role": "user", "content": content}]}
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        if settings.LLM_APP_URL:
+            headers["HTTP-Referer"] = settings.LLM_APP_URL
+        if settings.LLM_APP_TITLE:
+            headers["X-Title"] = settings.LLM_APP_TITLE
+        req = http_request.Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with http_request.urlopen(req, timeout=180) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
 

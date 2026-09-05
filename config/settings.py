@@ -208,6 +208,9 @@ else:
     LLM_API_KEY = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "stealth/ox-alpha")
+# Vision-capable model for grading hand-drawn answers (image_url parts).
+# Defaults to the main model; override when it cannot see images.
+LLM_VISION_MODEL = os.getenv("LLM_VISION_MODEL", "") or LLM_MODEL
 
 # Separate provider/model for high-volume tutor CHAT (cheap by default) vs.
 # the primary provider used for question generation + grading (quality-critical).

@@ -746,6 +746,33 @@ class PaperAnswerTests(TestCase):
             {"doc_id": self.doc.id, "qid": "4a", "selected_index": 0})
         self.assertEqual(response.status_code, 400)
 
+    def test_drawing_graded_by_vision_and_stored(self):
+        import base64
+
+        from unittest.mock import patch
+
+        from apps.quiz.models import PaperAttempt
+
+        png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        b64 = base64.b64encode(png).decode()
+        with patch("apps.quiz.api.grade_drawing",
+                   return_value=(2.0, 3.0, "Nice triangle.")), patch(
+            "apps.quiz.api.PaperAnswerView._ensure_keys",
+        ), patch("apps.quiz.services.cropper.anchor_text",
+                 return_value="Q4a triangle"):
+            response = self._post(
+                {"doc_id": self.doc.id, "qid": "4a", "drawing": b64})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["awarded_marks"], 2.0)
+        attempt = PaperAttempt.objects.get()
+        self.assertTrue(bool(attempt.drawing))
+
+    def test_oversize_drawing_rejected(self):
+        response = self._post(
+            {"doc_id": self.doc.id, "qid": "4a", "drawing": "x" * 3000001})
+        self.assertEqual(response.status_code, 400)
+
     def test_anchors_endpoint_lists_redact_and_pdf(self):
         response = self.client.get(f"/api/quiz/paper/{self.doc.id}/anchors/")
         # No PDF file on disk in tests: endpoint reports unavailability.
