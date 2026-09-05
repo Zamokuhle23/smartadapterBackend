@@ -35,9 +35,12 @@ SYL_KINDS = re.compile(
     r"scheme of assessment|% of teaching time|assessment objectives|"
     r"appendix \d",
     re.IGNORECASE)
-HAS_MARKS = re.compile(r"\[\d{1,2}\]|Fig\.|\[Total")
+HAS_MARKS = re.compile(
+    r"\[\d{1,2}\]|\(\d{1,2} marks?\)|Fig\.|Total|Answer all|"
+    r"Turn over|CANDIDATE NUMBER|CENTRE NUMBER")
 Q_MARK = re.compile(
-    r"\[\d{1,2}\]|\[Total|Fig\.|Turn over|CANDIDATE NUMBER|CENTRE NUMBER|"
+    r"\[\d{1,2}\]|\(\d{1,2} marks?\)|\[Total|Fig\.|Turn over|"
+    r"CANDIDATE NUMBER|CENTRE NUMBER|Answer all|"
     r"\.{10,}|_{10,}|2 hours|1 hour",
     re.IGNORECASE)
 
