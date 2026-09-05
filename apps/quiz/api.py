@@ -592,7 +592,7 @@ class PaperAnchorsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, doc_id):
-        from apps.quiz.services.cropper import redact_zones
+        from apps.quiz.services.cropper import content_crop, redact_zones
         from apps.syllabus.models import SyllabusDocument
 
         try:
@@ -619,6 +619,7 @@ class PaperAnchorsView(APIView):
                     "questions": [a for a in anchors
                                   if a["page_number"] == pno],
                     "redact": redact_zones(page),
+                    "crop": content_crop(page),
                 }
         return Response({
             "document": doc.id,

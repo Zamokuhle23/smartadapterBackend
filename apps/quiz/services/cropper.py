@@ -287,6 +287,49 @@ def part_kind(page, top: float, bottom: float) -> str:
     return "text"
 
 
+def content_crop(page):
+    """Per-page margin fractions [left, top, right, bottom] the app can cut.
+
+    Union of text words + image blocks minus furniture (admin strip,
+    watermark, marginalia, corner marks, footer), padded 10pt so vector
+    figure edges without labels survive, then capped (L6/R12/T10/B6%) so
+    an unusual page can never over-crop. Returns None when unmeasurable.
+    """
+    import pymupdf
+
+    W, H = float(page.rect.width), float(page.rect.height)
+    boxes = []
+    for w in page.get_text("words"):
+        t = (w[4] or "")
+        tl = t.lower()
+        if "papa" in tl or "cambridge" in tl:
+            continue
+        if MARGIN_WORDS.search(t):
+            continue
+        boxes.append(pymupdf.Rect(w[0], w[1], w[2], w[3]))
+    try:
+        for b in page.get_text("dict").get("blocks", ()):
+            if b.get("type") == 1:
+                boxes.append(pymupdf.Rect(b["bbox"]))
+    except Exception:  # noqa: BLE001 - words alone still give a box
+        pass
+    kept = [b for b in boxes
+            if b.y0 > H * 0.08 and b.y1 < H * 0.94
+            and b.x1 > 12 and b.x0 < W - 12
+            and (b.x1 - b.x0) > 0 and (b.y1 - b.y0) > 0]
+    if not kept:
+        return None
+    pad = 10.0
+    x0 = max(0.0, min(b.x0 for b in kept) - pad)
+    y0 = max(0.0, min(b.y0 for b in kept) - pad)
+    x1 = min(W, max(b.x1 for b in kept) + pad)
+    y1 = min(H, max(b.y1 for b in kept) + pad)
+    crop = [x0 / W, y0 / H, (W - x1) / W, (H - y1) / H]
+    caps = (0.06, 0.10, 0.12, 0.06)
+    crop = [max(0.0, min(c, cap)) for c, cap in zip(crop, caps)]
+    return [round(c, 3) for c in crop]
+
+
 def redact_zones(page):
     """Page regions to hide when displaying: headers/footers with admin
     furniture, barcode clusters, marginalia strips. Returned as PDF-point

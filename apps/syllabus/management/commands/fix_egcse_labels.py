@@ -121,6 +121,9 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--apply", action="store_true")
+        parser.add_argument("--retitle", action="store_true",
+                            help="Rewrite QP/MS titles from stored fields "
+                                 "(drops misleading filename stems)")
 
     def handle(self, *args, **options):
         import pymupdf
@@ -236,3 +239,40 @@ class Command(BaseCommand):
                 self.stdout.write(f"    dropped {na} anchors, {nt} topics")
         self.stdout.write(self.style.SUCCESS(
             f"{'Applied' if apply else 'Planned'} changes on {changed} docs."))
+        if options["retitle"]:
+            self._retitle(apply)
+
+    def _retitle(self, apply: bool):
+        """Rewrite QP/MS titles from stored fields.
+
+        Filename stems are unreliable ("Accounting…" on a SiSwati paper,
+        "Mark Scheme" on a question paper). Canonical form:
+        EGCSE {Subject} {Year} Paper {N} [code][ Mark Scheme].
+        Only when year+paper are known; specimen sittings keep a marker.
+        """
+        qs = SyllabusDocument.objects.filter(
+            source=SyllabusDocument.Source.EGCSE,
+            doc_type__in=(SyllabusDocument.DocType.PAST_PAPER,
+                          SyllabusDocument.DocType.MARK_SCHEME),
+        ).select_related("subject").order_by("id")
+        changed = 0
+        for doc in qs:
+            if not (doc.year and doc.paper_number):
+                continue
+            name = doc.subject.name
+            title = (f"EGCSE {name} {doc.year} "
+                     f"Paper {doc.paper_number} [{doc.subject.code}]")
+            if doc.doc_type == SyllabusDocument.DocType.MARK_SCHEME:
+                title += " Mark Scheme"
+            elif not doc.session:
+                title += " Specimen"
+            if title == doc.title:
+                continue
+            changed += 1
+            self.stdout.write(f"  {'APPLY' if apply else 'PLAN'} {doc.id} "
+                              f"{doc.title[:50]!r} -> {title!r}")
+            if apply:
+                doc.title = title
+                doc.save(update_fields=["title"])
+        self.stdout.write(self.style.SUCCESS(
+            f"{'Retitled' if apply else 'Would retitle'} {changed} docs."))
