@@ -1010,6 +1010,50 @@ def grade_text(question_text: str, guidance: str, marks: int,
     return awarded, max_marks, feedback
 
 
+EXPLAIN_PROMPT = """You are a patient ECESWA tutor explaining one exam question.
+
+QUESTION:
+{question}
+
+MODEL ANSWER (authoritative, from the official mark scheme):
+{guidance}
+
+SUPPORTING NOTES (syllabus / examiner reports, if relevant):
+{notes}
+
+Explain to the student, in plain language:
+1. What the question is really asking.
+2. The correct answer, step by step.
+3. The common mistakes to avoid.
+Keep it tight (max 250 words). Reply with ONLY valid JSON, no fences:
+{{"explanation": "<your explanation>"}}"""
+
+
+def explain_question(question_text: str, guidance: str, notes: str = "") -> str:
+    """On-demand per-question explanation (model answer + walkthrough)."""
+    prompt = EXPLAIN_PROMPT.format(
+        question=(question_text or "")[:2000],
+        guidance=(guidance or "(none supplied)")[:2000],
+        notes=(notes or "(none)")[:2000],
+    )
+    try:
+        raw = _chat(
+            [
+                {"role": "system", "content": (
+                    "You explain exam questions clearly. "
+                    "Output ONLY valid JSON.")},
+                {"role": "user", "content": prompt},
+            ]
+        )
+        item = _extract_json_object(raw)
+        text = str(item.get("explanation", "")).strip()
+        if text:
+            return text[:2000]
+        return raw.strip()[:2000]
+    except Exception:  # noqa: BLE001 - explanation is best-effort
+        return ""
+
+
 DRAW_GRADE_PROMPT = """You are an ECESWA examiner marking a student's HAND-DRAWN answer.
 
 QUESTION ({marks} marks):

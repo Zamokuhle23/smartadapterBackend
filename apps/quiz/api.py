@@ -743,8 +743,84 @@ class PaperAnswerView(APIView):
                 "awarded_marks": awarded,
                 "max_marks": int(max_marks) if max_marks is not None else None,
                 "feedback": feedback,
+                "model_answer": anchor.marking_guidance or "",
             }
         )
+
+
+class PaperExplainView(APIView):
+    """POST {doc_id, qid} -> on-demand explanation for one paper question.
+
+    Uses the cached mark-scheme guidance plus supporting syllabus /
+    examiner-report chunks. Best-effort: never 500s on LLM failure.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "llm"
+
+    def post(self, request):
+        from apps.quiz.services.cropper import anchor_text
+        from apps.quiz.services.generator import explain_question
+        from apps.syllabus.models import SyllabusDocument
+
+        try:
+            doc = SyllabusDocument.objects.select_related(
+                "subject", "subject__syllabus").get(
+                pk=request.data.get("doc_id"))
+            anchor = QuestionAnchor.objects.get(
+                document=doc, qid=str(request.data.get("qid") or ""))
+        except (SyllabusDocument.DoesNotExist, QuestionAnchor.DoesNotExist):
+            return Response({"detail": "Unknown paper or question"}, status=400)
+        if doc.subject is not None and Enrollment.objects.filter(
+            student=request.user, subject=doc.subject
+        ).first() is None:
+            return Response({"detail": "Not enrolled in this subject"},
+                            status=403)
+        try:
+            text = anchor_text(doc.file.path, anchor.page_number, anchor.bbox)
+        except Exception:  # noqa: BLE001
+            text = ""
+        PaperAnswerView._ensure_keys(doc, anchor, text)
+        notes = self._supporting_notes(doc, text)
+        try:
+            explanation = explain_question(
+                text or f"Paper Q{anchor.qid}",
+                anchor.marking_guidance or "",
+                notes,
+            )
+        except Exception:  # noqa: BLE001
+            explanation = ""
+        return Response({
+            "explanation": explanation,
+            "model_answer": anchor.marking_guidance or "",
+        })
+
+    @staticmethod
+    def _supporting_notes(doc, question_text: str) -> str:
+        """Top syllabus/examiner-report chunks for this question (RAG)."""
+        from apps.quiz.services.generator import _chunk_source_line
+        from apps.rag.services.retriever import retrieve
+
+        if doc.subject is None or not (question_text or "").strip():
+            return ""
+        try:
+            chunks = retrieve(
+                doc.subject.syllabus, question_text[:1000], k=6,
+                subject=doc.subject,
+            )
+        except Exception:  # noqa: BLE001
+            return ""
+        bits = []
+        for chunk in chunks:
+            doc_type = getattr(chunk.document, "doc_type", "")
+            if doc_type not in ("syllabus", "notes"):
+                continue
+            bits.append(
+                f"{_chunk_source_line(chunk)}\n{(chunk.text or '')[:800]}")
+            if len(bits) >= 3:
+                break
+        return "\n\n".join(bits)
 
     @staticmethod
     def _ensure_keys(doc, anchor, text):
