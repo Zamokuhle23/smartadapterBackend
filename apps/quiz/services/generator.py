@@ -401,6 +401,9 @@ def generate_questions(subject, count: int = 3, difficulty: int | None = None,
     query = query or derived
 
     raw_chunks = retrieve(subject.syllabus, query, k=16, subject=subject)
+    # Ground questions in real exam items only: mark schemes describe
+    # marking (not questions) and syllabi describe curriculum (not items).
+    raw_chunks = _past_paper_chunks(raw_chunks)
     raw_chunks = _filter_chunks_by_tier(raw_chunks, tier)
     pp_sources = [_chunk_source(c) for c in _past_paper_chunks(raw_chunks)]
     preferred = _preferred_source(pp_sources)
@@ -940,6 +943,7 @@ def next_exam_question(session: ExamSession) -> QuizQuestion | None:
         k=4,
         subject=session.subject,
     )
+    context_chunks = _past_paper_chunks(context_chunks)
     context_chunks = _filter_chunks_by_tier(context_chunks, session.plan.get("tier", ""))
     prompt = EXAM_QUESTION_PROMPT.format(
         level=session.subject.syllabus.get_level_display(),

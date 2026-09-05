@@ -341,6 +341,52 @@ class QueryOverrideTests(TestCase):
         self.assertIn("triangle diagram", seen.get("query", ""))
 
 
+class GroundingTests(TestCase):
+    """Generation grounds in past-paper items, not mark schemes/syllabi."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+
+    def test_mark_scheme_chunks_excluded_from_prompt(self):
+        from unittest.mock import patch
+
+        from apps.quiz.services.generator import generate_questions
+        from apps.rag.models import DocumentChunk
+        from apps.syllabus.models import SyllabusDocument
+
+        def doc(title, dtype):
+            return SyllabusDocument.objects.create(
+                syllabus=self.syllabus, subject=self.subject, title=title,
+                doc_type=dtype, source=SyllabusDocument.Source.EGCSE)
+
+        def chunk(d, text):
+            return DocumentChunk(syllabus=self.syllabus, document=d,
+                                 subject=self.subject, ordinal=0,
+                                 page_number=1, text=text)
+
+        ms = chunk(doc("MS 2024", SyllabusDocument.DocType.MARK_SCHEME),
+                   "MS-TEXT annotations listed below")
+        pp = chunk(doc("QP 2024", SyllabusDocument.DocType.PAST_PAPER),
+                   "PP-TEXT triangle ABC diagram question")
+
+        prompts = []
+
+        class CapProvider:
+            def chat(self, messages):
+                prompts.append(messages[-1]["content"])
+                return FAKE_LLM_JSON
+
+        with patch("apps.rag.services.llm.get_chat_provider",
+                   return_value=CapProvider()), patch(
+            "apps.quiz.services.generator.retrieve",
+            return_value=[ms, pp],
+        ):
+            made = generate_questions(self.subject, count=1)
+        self.assertEqual(len(made), 1)
+        self.assertIn("PP-TEXT", prompts[0])
+        self.assertNotIn("MS-TEXT", prompts[0])
+
+
 class GenerationRetryTests(TestCase):
     """An all-bare batch gets one strict retry before surfacing an error."""
 
