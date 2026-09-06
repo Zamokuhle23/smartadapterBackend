@@ -1,10 +1,13 @@
 import asyncio
 import json
+import logging
 import queue
 import threading
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+
+logger = logging.getLogger(__name__)
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -67,6 +70,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             reply, meta = await database_sync_to_async(self._generate)(content)
         except Exception as exc:  # noqa: BLE001 - never drop a turn silently
+            logger.exception("Chat reply generation failed: %s", exc)
             await self.send_json({
                 "role": "tutor",
                 "content": ("Sorry, I could not generate a reply just now - "
