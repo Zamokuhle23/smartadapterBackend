@@ -64,7 +64,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.current_topic_id = topic.id if topic else None
         await self._save_message("user", content, topic=topic)
         await self.send_json({"role": "user", "content": content, "topic_id": topic.id if topic else None})
-        reply, meta = await database_sync_to_async(self._generate)(content)
+        try:
+            reply, meta = await database_sync_to_async(self._generate)(content)
+        except Exception as exc:  # noqa: BLE001 - never drop a turn silently
+            await self.send_json({
+                "role": "tutor",
+                "content": ("Sorry, I could not generate a reply just now - "
+                            "please try again."),
+                "topic_id": topic.id if topic else None,
+            })
+            return
         await self._save_message("tutor", reply, meta, topic=topic)
         await self.send_json({"role": "tutor", "content": reply, "meta": meta,
                               "topic_id": topic.id if topic else None})
