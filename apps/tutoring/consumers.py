@@ -60,7 +60,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         content = str(payload.get("content", "")).strip()
         if not content:
             return
-        topic = await database_sync_to_async(self._route_topic)(content)
+        topic = await self._route_topic(content)
         self.current_topic_id = topic.id if topic else None
         await self._save_message("user", content, topic=topic)
         await self.send_json({"role": "user", "content": content, "topic_id": topic.id if topic else None})
@@ -127,9 +127,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             elif kind == "error":
                 await self.send_json({"kind": "error", "text": data})
             elif kind == "save_user":
-                await self._save_message("user", data, topic=self._topic_obj())
+                topic = await database_sync_to_async(self._topic_obj)()
+                await self._save_message("user", data, topic=topic)
             elif kind == "save_tutor":
-                await self._save_message("tutor", data, topic=self._topic_obj())
+                topic = await database_sync_to_async(self._topic_obj)()
+                await self._save_message("tutor", data, topic=topic)
             elif kind == "transcript":
                 await self.send_json({"kind": "transcript", "text": data})
             elif kind == "event":
