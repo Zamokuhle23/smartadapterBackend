@@ -330,20 +330,22 @@ def answer_lines(page, bbox, drawings=None, raster_cache=None):
         cy = (r.y0 + r.y1) / 2
         if not (top + height * 0.25 < cy < bottom):
             continue  # stem area, not the answer space
-        lines.append(round(cy, 1))
+        lines.append({"y": round(cy, 1), "x0": round(r.x0, 1), "x1": round(r.x1, 1)})
     lines.sort()
     merged = []
-    for y in lines:
-        if merged and y - merged[-1] < 6:
-            merged[-1] = round((merged[-1] + y) / 2, 1)
+    for line in lines:
+        if merged and line["y"] - merged[-1]["y"] < 6:
+            merged[-1]["y"] = round((merged[-1]["y"] + line["y"]) / 2, 1)
+            merged[-1]["x0"] = min(merged[-1]["x0"], line["x0"])
+            merged[-1]["x1"] = max(merged[-1]["x1"], line["x1"])
         else:
-            merged.append(y)
+            merged.append(line)
     if len(merged) < 2:
         raster_lines = _raster_answer_lines(page, bbox, raster_cache)
-        for y in raster_lines:
-            if not any(abs(y - existing) < 6 for existing in merged):
-                merged.append(y)
-        merged.sort()
+        for line in raster_lines:
+            if not any(abs(line["y"] - existing["y"]) < 6 for existing in merged):
+                merged.append(line)
+        merged.sort(key=lambda line: line["y"])
     return merged
 
 
@@ -361,7 +363,11 @@ def _raster_answer_lines(page, bbox, cache=None):
                 continue
             if wx0 >= x0 - 3 and wx1 <= x1 + 3 and wy1 > top + (bottom - top) * 0.2:
                 if wx1 - wx0 >= width_pts * 0.45:
-                    dotted.append(round((wy0 + wy1) / 2, 1))
+                    dotted.append({
+                        "y": round((wy0 + wy1) / 2, 1),
+                        "x0": round(wx0, 1),
+                        "x1": round(wx1, 1),
+                    })
     except Exception:  # noqa: BLE001
         dotted = []
     if dotted:
@@ -414,7 +420,8 @@ def _raster_answer_lines(page, bbox, cache=None):
             merged[-1] = (merged[-1] + y) / 2
         else:
             merged.append(y)
-    return [round(y, 1) for y in merged]
+    return [{"y": round(y, 1), "x0": round(x0, 1), "x1": round(x1, 1)}
+            for y in merged]
 
 
 def content_crop(page):
