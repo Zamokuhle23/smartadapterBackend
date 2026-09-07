@@ -352,6 +352,7 @@ def answer_lines(page, bbox, drawings=None, raster_cache=None):
 def _raster_answer_lines(page, bbox, cache=None):
     """Find long horizontal answer rules in scanned/rasterized PDF pages."""
     import pymupdf
+    from PIL import Image
 
     x0, top, x1, bottom = (float(v) for v in bbox[:4])
     width_pts = max(1.0, x1 - x0)
@@ -401,20 +402,38 @@ def _raster_answer_lines(page, bbox, cache=None):
         return []
 
     found = []
-    # A printed rule is a long dark run; text never spans enough of the box.
+    # Two signatures: a solid printed rule (one long dark run) or a dotted
+    # answer line (many short runs spread across the width, as in scanned
+    # ECESWA papers). Plain text rows have few long runs and are excluded.
     for y in range(start, end):
         row = image.crop((left, y, right, y + 1)).tobytes()
         dark = 0
         longest = 0
         run = 0
-        for value in row:
+        runs = 0
+        first = -1
+        last = -1
+        for i, value in enumerate(row):
             if value < 190:
                 dark += 1
+                if run == 0:
+                    runs += 1
+                    if first < 0:
+                        first = i
                 run += 1
                 longest = max(longest, run)
+                last = i
             else:
                 run = 0
-        if dark >= width * 0.28 and longest >= width * 0.18:
+        span = (last - first) if first >= 0 else 0
+        solid = dark >= width * 0.28 and longest >= width * 0.18
+        dotted = (
+            runs >= 15
+            and longest <= width * 0.06
+            and span >= width * 0.6
+            and dark >= width * 0.02
+        )
+        if solid or dotted:
             found.append(y / zoom)
 
     merged = []
