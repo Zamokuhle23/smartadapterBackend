@@ -1,51 +1,113 @@
 """
 Message -> subtopic routing.
 
-Each student message is classified to a subtopic of the subject's syllabus tree
-using the existing RAG retrieval: the retrieved chunk with the highest similarity
-that carries a Topic determines the subtopic. If confidence is below a threshold
-(uncertain/off-syllabus/greeting), the message stays in the root "main chat"
-(topic=None).
+Each student message is classified to a subtopic of the subject's Topic tree
+(built from PageTopic page labels by the build_topic_trees command). Scoring
+is lexical: the message's content stems are matched against each subtopic's
+title plus its source page labels, so "factorise x^2 - 9" lands in the
+Factorisation thread even when the embedding retriever returns noisy chunks.
 
-Subtopic threads are auto-created implicitly: any message tagged with a Topic is
-grouped under that Topic, so a thread appears the first time the student talks
-about it. A subject yields at most as many threads as it has distinct subtopics.
+If confidence is below the threshold (uncertain/off-syllabus/greeting), the
+message stays in the caller's current thread (follow-ups like "show me the
+steps" continue where the student is) or in the root "main chat"
+(topic=None) when there is no current thread.
+
+Subtopic threads are auto-created implicitly: any message tagged with a Topic
+is grouped under that Topic, so a thread appears the first time the student
+talks about it. A later message about an existing subtopic is appended to
+that thread.
 """
 
-from django.conf import settings
+import re
 
 from apps.syllabus.models import Topic
 
-# Confidence floor for assigning a message to a subtopic. Below this the message
-# stays in main chat (route returns None). Tunable.
-ROUTE_THRESHOLD = 0.08
+# Minimum lexical score for assigning a message to a subtopic. The thread
+# title itself is worth 3 per shared stem, page-label variants 1 each, so a
+# single shared thread-title word (score 3) routes while stray single-word
+# label matches (score 1) do not. Tunable.
+ROUTE_THRESHOLD = 2
+
+_STOP = set(
+    "how do i the a an is are was were be been to of and or in on for with "
+    "what when where which who whom whose can could would should you your me "
+    "my we our they their this that these those it its as at by from not no "
+    "yes ok okay hi hello hey thanks thank please give get got make made show "
+    "tell explain another more other such like just very really thing answer "
+    "question example".split()
+)
+
+_SOCIAL = (
+    "hi", "hello", "hey", "thanks", "thank you", "good morning",
+    "good afternoon", "good evening", "bye", "who are you",
+    "what can you do",
+)
 
 
-def _top_similar_chunks(syllabus, subject, user_text: str, k: int = 6):
-    from apps.rag.services.retriever import retrieve
+def _stems(text: str) -> set[str]:
+    return {t[:6] for t in re.findall(r"[a-z]{3,}", (text or "").lower())
+            if t not in _STOP}
 
-    return retrieve(syllabus, user_text, k=k, subject=subject)
+
+def _is_social(user_text: str) -> bool:
+    lowered = (user_text or "").lower().strip()
+    lowered = re.sub(r"[^a-z ]", "", lowered).strip()
+    if len(lowered) < 4:
+        return True
+    return any(lowered == s or lowered.startswith(s + " ") for s in _SOCIAL)
 
 
-def classify_topic(session, user_text: str) -> Topic | None:
-    """Return the subtopic a message belongs to, or None for main chat."""
+def classify_topic(session, user_text: str, fallback=None) -> Topic | None:
+    """Return the subtopic a message belongs to, a fallback, or None (main).
+
+    `fallback` is the Topic of the thread the student is currently viewing;
+    lexically empty follow-ups ("show the steps") continue there instead of
+    bouncing to main chat.
+    """
     if not user_text or not user_text.strip():
-        return None
+        return fallback
     subject = session.subject
     if subject is None:
-        return None
+        return fallback
+    if _is_social(user_text):
+        return fallback
     try:
-        chunks = _top_similar_chunks(session.syllabus, subject, user_text, k=6)
+        topic = _best_topic(subject, user_text)
     except Exception:
-        return None
-    if not chunks:
-        return None
+        return fallback
+    return topic if topic is not None else fallback
 
-    # Take the first chunk that has a Topic mapped; the splittaed chunks are
-    # returned in similarity order, so the first topic-bearing one is the best.
-    for chunk in chunks:
-        topic = getattr(chunk, "topic", None)
-        if topic is not None:
+
+def _best_topic(subject, user_text: str) -> Topic | None:
+    from apps.quiz.models import PageTopic
+
+    from apps.syllabus.services.topic_labels import canonical_key
+
+    user = _stems(user_text)
+    if not user:
+        return None
+    # Aggregate source labels per canonical topic key.
+    labels_by_key: dict[str, set[str]] = {}
+    for label in PageTopic.objects.filter(
+        document__subject=subject
+    ).values_list("label", flat=True):
+        key = canonical_key(label)
+        if key:
+            labels_by_key.setdefault(key, set()).add(label)
+    if not labels_by_key:
+        return None
+    best_key, best_score = None, 0
+    for key, labels in labels_by_key.items():
+        title_hit = len(user & _stems(key))
+        label_hit = len(user & _stems(" ".join(labels)))
+        score = 3 * title_hit + label_hit
+        if score > best_score:
+            best_key, best_score = key, score
+    if best_key is None or best_score < ROUTE_THRESHOLD:
+        return None
+    # Resolve the canonical key to its Topic row (title may differ in case).
+    for topic in Topic.objects.filter(subject=subject):
+        if canonical_key(topic.title) == best_key:
             return topic
     return None
 

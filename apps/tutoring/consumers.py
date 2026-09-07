@@ -63,7 +63,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         content = str(payload.get("content", "")).strip()
         if not content:
             return
-        topic = await self._route_topic(content)
+        # The thread the student is viewing (None = main chat). Used as the
+        # fallback when the message itself carries no clear subtopic signal
+        # (follow-ups like "show me the steps" continue in place).
+        client_topic = await self._client_topic(payload.get("topic_id"))
+        self.current_topic_id = client_topic.id if client_topic else None
+        topic = await self._route_topic(content, self.current_topic_id)
         self.current_topic_id = topic.id if topic else None
         await self._save_message("user", content, topic=topic)
         await self.send_json({"role": "user", "content": content, "topic_id": topic.id if topic else None})
@@ -101,7 +106,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 return
             out.put(("transcript", text))
             try:
-                topic = classify_topic(self.session, text)
+                fallback = self._topic_obj_sync(self.current_topic_id)
+                topic = classify_topic(self.session, text, fallback=fallback)
             except Exception:
                 topic = None
             out.put(("topic", topic.id if topic else None))
@@ -159,9 +165,25 @@ class ChatConsumer(AsyncWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def _route_topic(self, content: str):
+    def _route_topic(self, content: str, fallback_id=None):
         from .services.routing import classify_topic
-        return classify_topic(self.session, content)
+        fallback = self._topic_obj_sync(fallback_id)
+        return classify_topic(self.session, content, fallback=fallback)
+
+    @database_sync_to_async
+    def _client_topic(self, topic_id):
+        return self._topic_obj_sync(topic_id)
+
+    def _topic_obj_sync(self, topic_id):
+        """Resolve a topic id to a Topic (or None) for DB write."""
+        if not topic_id:
+            return None
+        try:
+            tid = int(topic_id)
+        except (TypeError, ValueError):
+            return None
+        from apps.syllabus.models import Topic
+        return Topic.objects.filter(pk=tid).first()
 
     def _topic_obj(self):
         """Resolve the stashed current_topic_id to a Topic (or None) for DB write."""

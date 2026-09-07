@@ -930,6 +930,59 @@ class AnchorFeedTests(TestCase):
         self.assertEqual(gone.status_code, 404)
 
 
+class QuestionContinuityTests(TestCase):
+    """Remainders always ship with their stem first (context chain)."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+        self.user = User.objects.create_user("continuity", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        from apps.quiz.models import QuestionAnchor
+        from apps.syllabus.models import SyllabusDocument
+
+        self.doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP Cont",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE, year=2024, paper_number=2)
+        # Q10 stem on p1, (a) on p1, (b) orphaned on p2; Q11 head on p3.
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="10", page_number=1,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="10a", page_number=1,
+            bbox=[0.0, 210.0, 595.0, 400.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="10b", page_number=2,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="11", page_number=3,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+
+    def test_continuation_page_carries_stem(self):
+        pages = {p["page_number"]: p for p in self.client.get(
+            f"/api/quiz/practice/pages/?subject_id={self.subject.id}"
+            "&limit=10").json()["pages"]}
+        self.assertTrue(pages[2]["starts_mid_question"])
+        self.assertEqual(pages[2]["context_pages"], [1])
+        self.assertFalse(pages[1]["starts_mid_question"])
+        self.assertEqual(pages[1]["context_pages"], [])
+        self.assertFalse(pages[3]["starts_mid_question"])
+
+    def test_single_anchor_carries_stem(self):
+        from apps.quiz.models import QuestionAnchor
+
+        others = list(QuestionAnchor.objects.filter(
+            document=self.doc).exclude(qid="10b").values_list("id", flat=True))
+        body = self.client.get(
+            f"/api/quiz/anchors/next/?subject_id={self.subject.id}"
+            f"&exclude={','.join(map(str, others))}").json()
+        self.assertEqual(body["qid"], "10b")
+        self.assertTrue(body["starts_mid_question"])
+        self.assertEqual(body["context_pages"], [1])
+
+
 class GenerationRetryTests(TestCase):
     """An all-bare batch gets one strict retry before surfacing an error."""
 
