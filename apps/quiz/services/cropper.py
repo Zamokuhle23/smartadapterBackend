@@ -295,7 +295,7 @@ ADMIN_LINE = re.compile(
     re.IGNORECASE)
 
 
-def answer_lines(page, bbox, drawings=None):
+def answer_lines(page, bbox, drawings=None, raster_cache=None):
     """Y-centres (PDF points) of ruled answer lines inside an anchor bbox.
 
     Long thin horizontal rules in the lower part of the box are the
@@ -338,7 +338,68 @@ def answer_lines(page, bbox, drawings=None):
             merged[-1] = round((merged[-1] + y) / 2, 1)
         else:
             merged.append(y)
+    if len(merged) < 2:
+        raster_lines = _raster_answer_lines(page, bbox, raster_cache)
+        for y in raster_lines:
+            if not any(abs(y - existing) < 6 for existing in merged):
+                merged.append(y)
+        merged.sort()
     return merged
+
+
+def _raster_answer_lines(page, bbox, cache=None):
+    """Find long horizontal answer rules in scanned/rasterized PDF pages."""
+    import pymupdf
+
+    zoom = 2.0
+    page_no = page.number
+    image = cache.get(page_no) if cache is not None else None
+    if image is None:
+        try:
+            pix = page.get_pixmap(
+                matrix=pymupdf.Matrix(zoom, zoom),
+                colorspace=pymupdf.csGRAY,
+                alpha=False,
+            )
+            image = Image.frombytes("L", (pix.width, pix.height), pix.samples)
+            if cache is not None:
+                cache[page_no] = image
+        except Exception:  # noqa: BLE001
+            return []
+
+    x0, top, x1, bottom = (float(v) for v in bbox[:4])
+    left = max(0, int(x0 * zoom))
+    right = min(image.width, int(x1 * zoom))
+    start = max(0, int(top * zoom + (bottom - top) * zoom * 0.25))
+    end = min(image.height, int(bottom * zoom))
+    width = right - left
+    if width < 20 or end <= start:
+        return []
+
+    found = []
+    # A printed rule is a long dark run; text never spans enough of the box.
+    for y in range(start, end):
+        row = image.crop((left, y, right, y + 1)).tobytes()
+        dark = 0
+        longest = 0
+        run = 0
+        for value in row:
+            if value < 190:
+                dark += 1
+                run += 1
+                longest = max(longest, run)
+            else:
+                run = 0
+        if dark >= width * 0.28 and longest >= width * 0.18:
+            found.append(y / zoom)
+
+    merged = []
+    for y in found:
+        if merged and y - merged[-1] < 3:
+            merged[-1] = (merged[-1] + y) / 2
+        else:
+            merged.append(y)
+    return [round(y, 1) for y in merged]
 
 
 def content_crop(page):

@@ -611,6 +611,7 @@ class PaperAnchorsView(APIView):
             document=doc).order_by("page_number", "qid").values(
             "qid", "page_number", "bbox", "kind", "confidence", "status"))
         pages = {}
+        raster_line_cache = {}
         with pdf:
             for page in pdf:
                 pno = page.number + 1
@@ -622,7 +623,9 @@ class PaperAnchorsView(APIView):
                                 if a["page_number"] == pno]
                 for a in page_anchors:
                     try:
-                        a["lines"] = answer_lines(page, a["bbox"], drawings)
+                        a["lines"] = answer_lines(
+                            page, a["bbox"], drawings, raster_line_cache
+                        )
                     except Exception:  # noqa: BLE001
                         a["lines"] = []
                 pages[pno] = {
