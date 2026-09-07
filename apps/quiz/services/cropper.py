@@ -351,6 +351,22 @@ def _raster_answer_lines(page, bbox, cache=None):
     """Find long horizontal answer rules in scanned/rasterized PDF pages."""
     import pymupdf
 
+    x0, top, x1, bottom = (float(v) for v in bbox[:4])
+    width_pts = max(1.0, x1 - x0)
+    dotted = []
+    try:
+        for word in page.get_text("words"):
+            wx0, wy0, wx1, wy1, text = word[:5]
+            if text.count(".") < 5:
+                continue
+            if wx0 >= x0 - 3 and wx1 <= x1 + 3 and wy1 > top + (bottom - top) * 0.2:
+                if wx1 - wx0 >= width_pts * 0.45:
+                    dotted.append(round((wy0 + wy1) / 2, 1))
+    except Exception:  # noqa: BLE001
+        dotted = []
+    if dotted:
+        return dotted
+
     zoom = 2.0
     page_no = page.number
     image = cache.get(page_no) if cache is not None else None
@@ -367,7 +383,6 @@ def _raster_answer_lines(page, bbox, cache=None):
         except Exception:  # noqa: BLE001
             return []
 
-    x0, top, x1, bottom = (float(v) for v in bbox[:4])
     left = max(0, int(x0 * zoom))
     right = min(image.width, int(x1 * zoom))
     start = max(0, int(top * zoom + (bottom - top) * zoom * 0.25))
