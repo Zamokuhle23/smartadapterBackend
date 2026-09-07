@@ -361,8 +361,11 @@ def _raster_answer_lines(page, bbox, cache=None):
             wx0, wy0, wx1, wy1, text = word[:5]
             if text.count(".") < 5:
                 continue
-            if wx0 >= x0 - 3 and wx1 <= x1 + 3 and wy1 > top + (bottom - top) * 0.2:
-                if wx1 - wx0 >= width_pts * 0.45:
+            if not (wx0 >= x0 - 3 and wx1 <= x1 + 3):
+                continue  # outside this answer box horizontally
+            if not (wy1 > top + (bottom - top) * 0.2 and wy0 < bottom):
+                continue  # stem area above, or another part's lines below
+            if wx1 - wx0 >= width_pts * 0.45:
                     dotted.append({
                         "y": round((wy0 + wy1) / 2, 1),
                         "x0": round(wx0, 1),
