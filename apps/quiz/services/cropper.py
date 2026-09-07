@@ -320,7 +320,10 @@ def answer_lines(page, bbox, drawings=None):
             continue
         r = pymupdf.Rect(r)
         w, h = r.width, r.height
-        if h <= 0 or w < h * 4 or h > 2.5:
+        # PDF horizontal rules are often zero-height paths. Treat them as
+        # valid lines; rejecting h <= 0 silently removes every answer line in
+        # many scanned/exam-paper exports.
+        if w <= 0 or (h > 2.5 and w < h * 4) or h > 2.5:
             continue  # not a horizontal rule
         if w < width * 0.4:
             continue  # short rule: table cell, underline, tick
