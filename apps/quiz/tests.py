@@ -986,11 +986,24 @@ class QuestionContinuityTests(TestCase):
         QuestionAnchor.objects.create(
             document=self.doc, qid="13", page_number=9,
             bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        # Q7 statement alone on p10 (bare head), parts live on p11.
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="7", page_number=10,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="7a", page_number=11,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
 
-    def _pages(self):
+    def _pages(self, limit=20):
         return {p["page_number"]: p for p in self.client.get(
             f"/api/quiz/practice/pages/?subject_id={self.subject.id}"
-            "&limit=10").json()["pages"]}
+            f"&limit={limit}").json()["pages"]}
+
+    def _ordered(self, **params):
+        q = "&".join(f"{k}={v}" for k, v in params.items())
+        return self.client.get(
+            f"/api/quiz/practice/pages/?subject_id={self.subject.id}&{q}"
+        ).json()["pages"]
 
     def test_continuation_page_carries_stem(self):
         pages = self._pages()
@@ -1030,6 +1043,28 @@ class QuestionContinuityTests(TestCase):
         self.assertEqual(pages[8]["continued_pages"], [9])
         self.assertTrue(pages[9]["starts_mid_question"])
         self.assertEqual(pages[9]["context_pages"], [8])
+
+    def test_statement_page_is_read_only(self):
+        pages = self._pages()
+        # Page 10 is just Q7's statement (bare head, parts on page 11):
+        # no answerable parts, no submit.
+        self.assertTrue(pages[10]["read_only"])
+        self.assertEqual(pages[10]["continued_pages"], [11])
+        # Answerable pages stay writable.
+        for pno in (1, 2, 4, 5, 6, 8, 9, 11):
+            self.assertFalse(pages[pno]["read_only"])
+
+    def test_stem_precedes_continuation_in_order(self):
+        from apps.quiz.models import PageTopic
+        PageTopic.objects.create(
+            document=self.doc, page_number=11, label="TargetSeven",
+            confidence=1.0)
+        pages = self._ordered(topics="TargetSeven", limit=10)
+        self.assertEqual(
+            [(p["page_number"], p["read_only"]) for p in pages],
+            [(10, True), (11, False)])
+        self.assertEqual(pages[1]["context_pages"], [10])
+        self.assertTrue(pages[1]["starts_mid_question"])
 
     def test_single_anchor_carries_stem(self):
         from apps.quiz.models import QuestionAnchor

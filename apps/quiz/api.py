@@ -985,6 +985,12 @@ def _qid_prefix(qid: str) -> str:
     return "".join(out)
 
 
+def _is_bare_number(qid: str) -> bool:
+    """A bare question head ("5") vs a lettered part ("5a", "(b)")."""
+    q = (qid or "").strip().strip("()")
+    return bool(q) and q.isdigit()
+
+
 def _question_key(qid: str) -> str:
     """Group anchors of one exam question: numeric prefix ("10b" -> "10"),
     else the whole normalized qid (bare "(b)" slices match each other)."""
@@ -1129,37 +1135,83 @@ class PracticePagesView(APIView):
             return Response({"detail": "no_questions"}, status=404)
         docs = {d.id: d for d in SyllabusDocument.objects.filter(
             id__in={r["document_id"] for r in rows}).select_related("subject")}
-        # Prefetch anchors around the served pages so continuation detection
-        # stays at one query per document instead of per page.
+        # Prefetch anchors around the served pages so stem/continuation
+        # detection stays at one query per document instead of per page.
         doc_pages: dict[int, set[int]] = {}
         for r in rows:
             doc_pages.setdefault(r["document_id"], set()).add(r["page_number"])
         anchor_cache = _prefetch_anchor_cache(doc_pages)
-        out = []
-        for r in rows:
-            doc = docs.get(r["document_id"])
-            if doc is None:
-                continue
+        # Prefetch page labels for served + neighbouring pages in one query.
+        label_map: dict[tuple[int, int], str] = {}
+        for doc_id, page_no, lab in PageTopic.objects.filter(
+                document_id__in=set(doc_pages)).values_list(
+                "document_id", "page_number", "label"):
+            label_map.setdefault((doc_id, page_no), lab)
+
+        def page_entry(doc, page_no) -> dict:
             starts_mid, context_pages, continued_pages = question_context(
-                doc, r["page_number"], anchor_cache)
-            out.append({
+                doc, page_no, anchor_cache)
+            qids = anchor_cache.get((doc.id, page_no), [])
+            # Statement-only stem page: every anchor is a bare head whose
+            # lettered parts live on later pages, so nothing is answerable
+            # here - the client shows it read-only with no submit button.
+            # (A bare head with no lettered parts anywhere stays answerable.)
+            read_only = False
+            if qids and all(_is_bare_number(q) for q in qids):
+                keys = {_question_key(q) for q in qids}
+                page = page_no + 1
+                for _ in range(3):
+                    later = anchor_cache.get((doc.id, page), [])
+                    if any(_question_key(q) in keys and not _is_bare_number(q)
+                           for q in later):
+                        read_only = True
+                        break
+                    page += 1
+            return {
                 "doc_id": doc.id,
-                "page_number": r["page_number"],
+                "page_number": page_no,
                 "starts_mid_question": starts_mid,
                 "context_pages": context_pages,
                 "continued_pages": continued_pages,
-                "label": self._page_label(doc, r["page_number"]),
+                # Statement-only stem page (bare head, question continues
+                # later): no answerable parts here, client shows it
+                # read-only with no submit button.
+                "read_only": read_only,
+                "label": label_map.get((doc.id, page_no), ""),
                 "pdf_url": (request.build_absolute_uri(doc.file.url)
                             if doc.file else None),
                 "paper_label": (f"Paper {doc.paper_number}"
                                 if doc.paper_number else "Past paper"),
                 "source_year": doc.year,
                 "source": doc.source,
-            })
-        return Response({"pages": out})
+            }
 
-    @staticmethod
-    def _page_label(doc, page_number) -> str:
-        topic = PageTopic.objects.filter(
-            document=doc, page_number=page_number).first()
-        return topic.label if topic else ""
+        # Swipe order: each stem page is its own entry immediately before
+        # its continuation (never stacked, never orphaned). Stems dedupe:
+        # a page already placed stays where it is.
+        ordered: list[tuple[str, dict]] = []
+        seen_entries: set[tuple[int, int]] = set()
+        for r in rows:
+            doc = docs.get(r["document_id"])
+            if doc is None:
+                continue
+            main = page_entry(doc, r["page_number"])
+            for stem_page in main["context_pages"]:
+                key = (doc.id, stem_page)
+                if key not in seen_entries:
+                    seen_entries.add(key)
+                    ordered.append(("stem", page_entry(doc, stem_page)))
+            key = (doc.id, r["page_number"])
+            if key not in seen_entries:
+                seen_entries.add(key)
+                ordered.append(("main", main))
+        # Honor the limit without ever stranding a continuation: drop
+        # trailing mains first, never stems.
+        while len(ordered) > limit:
+            for i in range(len(ordered) - 1, -1, -1):
+                if ordered[i][0] == "main":
+                    ordered.pop(i)
+                    break
+            else:
+                break
+        return Response({"pages": [entry for _, entry in ordered]})
