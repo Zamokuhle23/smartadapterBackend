@@ -104,7 +104,7 @@ def _format_weaknesses(student, subject, user_text: str) -> str:
     return "\n".join(f"- {statement} (mastery {mastery:.0%})" for statement, mastery in rows)
 
 
-def build_messages(session, user_text: str, topic=None) -> list[dict]:
+def build_messages(session, user_text: str, topic=None) -> tuple[list, list, list]:
     profile = session.student.profile if hasattr(session.student, "profile") else None
     language = getattr(profile, "preferred_language", "en") or "en"
     style = getattr(profile, "learning_style", "auto") or "auto"
@@ -144,7 +144,11 @@ def build_messages(session, user_text: str, topic=None) -> list[dict]:
 
     recent = _history_messages(session, user_text, topic=topic, recent=6, relevant=4)
 
-    return [{"role": "system", "content": system}, *recent, {"role": "user", "content": user_text}], [c.id for c in chunks]
+    return (
+        [{"role": "system", "content": system}, *recent, {"role": "user", "content": user_text}],
+        [c.id for c in chunks],
+        chunks,
+    )
 
 
 def _history_messages(session, user_text: str, topic=None, recent: int = 4, relevant: int = 4) -> list[dict]:
@@ -199,7 +203,7 @@ def _history_messages(session, user_text: str, topic=None, recent: int = 4, rele
 
 def generate_reply(session, user_text: str, topic=None) -> tuple[str, dict]:
     """Full turn: persist user message, produce grounded tutor reply."""
-    messages, chunk_ids = build_messages(session, user_text, topic=topic)
+    messages, chunk_ids, _chunks = build_messages(session, user_text, topic=topic)
     provider = get_chat_provider("")  # cheap chat model (tutor conversation)
     reply_text = provider.chat(messages)
     reply_text, key_terms = _split_key_terms(reply_text)
@@ -243,14 +247,66 @@ def stream_chat(session, user_text: str, topic=None):
     Message building (incl. scoped syllabus/mark-scheme/examiner-report
     retrieval) happens first so chunk ids are known; then tokens stream from
     the provider. Providers fall back to one-shot internally, so callers
-    always get at least one delta. Returns (delta_iterator, chunk_ids).
+    always get at least one delta.
+    Returns (delta_iterator, chunk_ids, chunk_texts) - texts feed the
+    key-term fallback when the model skips its KEY_TERMS line.
     """
-    messages, chunk_ids = build_messages(session, user_text, topic=topic)
+    messages, chunk_ids, chunks = build_messages(session, user_text, topic=topic)
     provider = get_chat_provider("")  # cheap chat model (tutor conversation)
     stream = getattr(provider, "stream", None)
+    texts = [(c.text or "")[:600] for c in chunks[:8]]
     if stream is None:
-        return iter([provider.chat(messages)]), chunk_ids
-    return stream(messages), chunk_ids
+        return iter([provider.chat(messages)]), chunk_ids, texts
+    return stream(messages), chunk_ids, texts
+
+
+_TERM_STOP = set(
+    "about after among between during under over through into onto upon "
+    "while where when which their there these those other another every "
+    "process system using usually often always never across within without "
+    "would could should cells".split()
+)
+
+
+def _fallback_key_terms(reply: str, chunk_texts: list) -> list[str]:
+    """Deterministic key terms when the model skips its KEY_TERMS line.
+
+    Priority 1: the reply's own **bold** spans (the prompt asks for key
+    terms in bold). Priority 2: frequent syllabus-vocabulary words from the
+    retrieved chunks that actually appear in the reply.
+    """
+    import re as _re
+
+    terms: list[str] = []
+    seen = set()
+
+    def _add(term: str):
+        t = (term or "").strip().strip("*-").strip()
+        if not t or len(t.split()) > 4 or len(terms) >= 8:
+            return
+        if t.lower() not in seen:
+            seen.add(t.lower())
+            terms.append(t)
+
+    for bold in _re.findall(r"\*\*(.+?)\*\*", reply or ""):
+        _add(bold)
+    if len(terms) < 6:
+        from collections import Counter
+        freq: Counter = Counter()
+        for text in chunk_texts or []:
+            for w in _re.findall(r"[a-z]{6,}", (text or "").lower()):
+                if w not in _TERM_STOP:
+                    freq[w] += 1
+        lowered = (reply or "").lower()
+        for word, _ in freq.most_common(40):
+            if len(terms) >= 8:
+                break
+            if word in seen:
+                continue
+            if _re.search(r"\b" + _re.escape(word) + r"\b", lowered):
+                seen.add(word)
+                terms.append(word)
+    return terms
 
 
 # ---------------------------------------------------------------------------

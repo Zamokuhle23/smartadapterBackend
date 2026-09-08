@@ -90,6 +90,21 @@ class KeyTermsTests(TestCase):
         self.assertIn("KEY_TERMS", SYSTEM_TEMPLATE)
         self.assertIn("**bold**", SYSTEM_TEMPLATE)
 
+    def test_fallback_terms_from_bold_spans(self):
+        from .services.orchestrator import _fallback_key_terms
+        terms = _fallback_key_terms(
+            "Leaves contain **chlorophyll** in the **chloroplasts**.", [])
+        self.assertIn("chlorophyll", terms)
+        self.assertIn("chloroplasts", terms)
+
+    def test_fallback_terms_from_syllabus_vocab(self):
+        from .services.orchestrator import _fallback_key_terms
+        terms = _fallback_key_terms(
+            "Water crosses the membrane during osmosis.",
+            ["osmosis membrane concentration gradient solvent"])
+        self.assertIn("osmosis", terms)
+        self.assertIn("membrane", terms)
+
 
 class ChatRetrievalScopeTests(TestCase):
     """Chat searches this subject's syllabus + mark schemes + notes only.

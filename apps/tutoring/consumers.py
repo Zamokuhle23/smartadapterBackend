@@ -92,8 +92,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             try:
                 from .services.orchestrator import stream_chat
                 topic = self._topic_obj_sync(topic_id)
-                deltas, chunk_ids = stream_chat(self.session, content, topic=topic)
-                loop.call_soon_threadsafe(out.put_nowait, ("chunks", chunk_ids))
+                deltas, chunk_ids, chunk_texts = stream_chat(self.session, content, topic=topic)
+                loop.call_soon_threadsafe(out.put_nowait, ("chunks", (chunk_ids, chunk_texts)))
                 for delta in deltas:
                     if delta:
                         loop.call_soon_threadsafe(out.put_nowait, ("token", delta))
@@ -106,12 +106,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         parts: list[str] = []
         chunk_ids: list = []
+        chunk_texts: list = []
         while True:
             kind, data = await out.get()
             if kind == "done":
                 break
             if kind == "chunks":
-                chunk_ids = list(data or [])
+                chunk_ids, chunk_texts = data
+                chunk_ids = list(chunk_ids or [])
             elif kind == "token":
                 parts.append(data)
                 await self.send_json({"kind": "token", "text": data})
@@ -122,8 +124,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             reply = ("Sorry, I could not generate a reply just now - "
                      "please try again.")
             await self.send_json({"kind": "token", "text": reply})
-        from .services.orchestrator import _split_key_terms
+        from .services.orchestrator import _split_key_terms, _fallback_key_terms
         reply, key_terms = _split_key_terms(reply)
+        if not key_terms:
+            key_terms = _fallback_key_terms(reply, chunk_texts)
         topic = await database_sync_to_async(self._topic_obj)()
         meta = {"retrieved_chunk_ids": chunk_ids, "key_terms": key_terms}
         await self._save_message("tutor", reply, meta, topic=topic)
