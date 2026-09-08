@@ -945,7 +945,7 @@ class NextAnchorView(APIView):
             return Response({"detail": "no_questions"}, status=404)
         doc = anchor.document
         is_mcq = anchor.correct_index is not None
-        starts_mid, context_pages = question_context(doc, anchor.page_number)
+        starts_mid, context_pages, continued_pages = question_context(doc, anchor.page_number)
         return Response({
             "id": anchor.id,
             "doc_id": doc.id,
@@ -953,6 +953,7 @@ class NextAnchorView(APIView):
             "page_number": anchor.page_number,
             "starts_mid_question": starts_mid,
             "context_pages": context_pages,
+            "continued_pages": continued_pages,
             "bbox": anchor.bbox,
             "kind": anchor.kind,
             "format": "mcq" if is_mcq else "structured",
@@ -984,21 +985,33 @@ def _qid_prefix(qid: str) -> str:
     return "".join(out)
 
 
-def _is_head_qid(qid: str) -> bool:
-    """A question head ("10") vs a lettered part ("10a", "10b", "(b)")."""
-    q = (qid or "").strip().strip("()")
-    return bool(q) and q.isdigit()
+def _question_key(qid: str) -> str:
+    """Group anchors of one exam question: numeric prefix ("10b" -> "10"),
+    else the whole normalized qid (bare "(b)" slices match each other)."""
+    q = (qid or "").strip()
+    prefix = _qid_prefix(q)
+    if prefix:
+        return f"#{prefix}"
+    return q.strip("()").lower() or q.lower()
 
 
 def question_context(document, page_number: int,
-                     _anchor_cache: dict | None = None) -> tuple[bool, list[int]]:
-    """Detect orphan continuations and build their context chain.
+                     _anchor_cache: dict | None = None, span: int = 3,
+                     ) -> tuple[bool, list[int], list[int]]:
+    """Group split questions with their stem, both directions.
 
-    Returns (starts_mid_question, context_pages). A page starts mid-question
-    when it holds lettered parts but no bare-number head: e.g. page 2 with
-    only "10b" while "10"/"10a" live on page 1. context_pages lists the
-    preceding pages of the same question (nearest first, max 3) so the
-    client can render the stem/diagram above instead of an orphan "(b)".
+    Returns (starts_mid_question, context_pages, continued_pages):
+    - context_pages: earlier pages of the same question(s), ascending
+      (stem first: problem statement, then the parts that build on it), so
+      a part like 5b never appears without 5/5a above it.
+    - continued_pages: later pages holding the same question(s), ascending,
+      so the client can label "continued on next page".
+    - starts_mid_question: True when every question on this page already
+      started on an earlier page (a pure continuation slice).
+
+    Pages group by question key over a contiguous run (gap = different
+    question). A bare-number slice ("5" alone, no lettered parts) counts as
+    its question's continuation just like "5b" does.
     """
     if _anchor_cache is None:
         qids = list(QuestionAnchor.objects.filter(
@@ -1006,41 +1019,57 @@ def question_context(document, page_number: int,
         ).values_list("qid", flat=True))
         _anchor_cache = {(document.id, page_number): qids}
 
-    def qids_on(doc_id, page):
+    def keys_on(doc_id, page):
         key = (doc_id, page)
         if key not in _anchor_cache:
             _anchor_cache[key] = list(QuestionAnchor.objects.filter(
                 document_id=doc_id, page_number=page
             ).values_list("qid", flat=True))
-        return _anchor_cache[key]
+        return {_question_key(q) for q in _anchor_cache[key]}
 
-    qids = qids_on(document.id, page_number)
-    if not qids:
-        return False, []
-    has_head = any(_is_head_qid(q) for q in qids)
-    has_part = any(not _is_head_qid(q) for q in qids)
-    if has_head or not has_part:
-        return False, []
-    prefixes = {_qid_prefix(q) for q in qids if _qid_prefix(q)}
-    context: list[int] = []
-    page = page_number - 1
-    while page >= 1 and len(context) < 3:
-        prev = qids_on(document.id, page)
-        if any(_qid_prefix(q) in prefixes for q in prev):
-            context.append(page)
-            page -= 1
-        else:
-            break
-    return True, context
+    keys_here = keys_on(document.id, page_number)
+    if not keys_here:
+        return False, [], []
+    context: set[int] = set()
+    continued: set[int] = set()
+    started_earlier: dict[str, bool] = {}
+    for key in keys_here:
+        # Backward run: the stem chain (nearest pages first, stored ascending).
+        page = page_number - 1
+        back: list[int] = []
+        while page >= 1 and len(back) < span:
+            if key in keys_on(document.id, page):
+                back.append(page)
+                page -= 1
+            else:
+                break
+        context.update(back)
+        started_earlier[key] = bool(back)
+        # Forward run: pages this question spills onto.
+        page = page_number + 1
+        fwd = 0
+        while fwd < span:
+            if key in keys_on(document.id, page):
+                continued.add(page)
+                page += 1
+                fwd += 1
+            else:
+                break
+    starts_mid = bool(keys_here) and all(started_earlier.values())
+    return starts_mid, sorted(context), sorted(continued)
 
 
 def _prefetch_anchor_cache(documents_pages: dict[int, set[int]],
                            span: int = 3) -> dict:
-    """One query per document for anchors in [min_page - span, max_page]."""
+    """One query per document for anchors in [min_page - span, max_page + span].
+
+    The window covers neighbours on both sides so backward stem chains and
+    forward continuations both resolve from cache.
+    """
     cache: dict = {}
     for doc_id, pages in documents_pages.items():
         lo = max(1, min(pages) - span)
-        hi = max(pages)
+        hi = max(pages) + span
         rows = (QuestionAnchor.objects.filter(
             document_id=doc_id, page_number__gte=lo, page_number__lte=hi)
             .values_list("page_number", "qid"))
@@ -1111,13 +1140,14 @@ class PracticePagesView(APIView):
             doc = docs.get(r["document_id"])
             if doc is None:
                 continue
-            starts_mid, context_pages = question_context(
+            starts_mid, context_pages, continued_pages = question_context(
                 doc, r["page_number"], anchor_cache)
             out.append({
                 "doc_id": doc.id,
                 "page_number": r["page_number"],
                 "starts_mid_question": starts_mid,
                 "context_pages": context_pages,
+                "continued_pages": continued_pages,
                 "label": self._page_label(doc, r["page_number"]),
                 "pdf_url": (request.build_absolute_uri(doc.file.url)
                             if doc.file else None),

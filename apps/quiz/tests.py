@@ -959,16 +959,77 @@ class QuestionContinuityTests(TestCase):
         QuestionAnchor.objects.create(
             document=self.doc, qid="11", page_number=3,
             bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        # Q5 stem + (a) on p4, bare-number tail slice alone on p5.
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="5", page_number=4,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="5a", page_number=4,
+            bbox=[0.0, 210.0, 595.0, 400.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="5", page_number=5,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        # Q6 alone on p6 (fresh control page).
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="6", page_number=6,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        # Q12 stem on p7, shared with fresh Q13 head on p8; Q13 tail on p9.
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="12", page_number=7,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="12", page_number=8,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="13", page_number=8,
+            bbox=[0.0, 210.0, 595.0, 400.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="13", page_number=9,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
 
-    def test_continuation_page_carries_stem(self):
-        pages = {p["page_number"]: p for p in self.client.get(
+    def _pages(self):
+        return {p["page_number"]: p for p in self.client.get(
             f"/api/quiz/practice/pages/?subject_id={self.subject.id}"
             "&limit=10").json()["pages"]}
+
+    def test_continuation_page_carries_stem(self):
+        pages = self._pages()
         self.assertTrue(pages[2]["starts_mid_question"])
         self.assertEqual(pages[2]["context_pages"], [1])
         self.assertFalse(pages[1]["starts_mid_question"])
         self.assertEqual(pages[1]["context_pages"], [])
         self.assertFalse(pages[3]["starts_mid_question"])
+
+    def test_forward_continuation_labelled(self):
+        pages = self._pages()
+        # Stem page says where its question goes next...
+        self.assertEqual(pages[1]["continued_pages"], [2])
+        self.assertEqual(pages[4]["continued_pages"], [5])
+        self.assertEqual(pages[7]["continued_pages"], [8])
+        # ...and tail / single pages point nowhere further.
+        self.assertEqual(pages[2]["continued_pages"], [])
+        self.assertEqual(pages[5]["continued_pages"], [])
+        self.assertEqual(pages[6]["continued_pages"], [])
+        self.assertEqual(pages[9]["continued_pages"], [])
+
+    def test_bare_number_tail_keeps_stem(self):
+        pages = self._pages()
+        # Page 5's bare "5" is Q5's tail slice, not a fresh question.
+        self.assertTrue(pages[5]["starts_mid_question"])
+        self.assertEqual(pages[5]["context_pages"], [4])
+        # Fresh single page untouched.
+        self.assertFalse(pages[6]["starts_mid_question"])
+        self.assertEqual(pages[6]["context_pages"], [])
+
+    def test_mixed_page_ships_continued_stem(self):
+        pages = self._pages()
+        # Page 8 holds continued Q12 plus fresh Q13: not a pure orphan,
+        # but Q12's stem still ships along, and Q13's tail is flagged.
+        self.assertFalse(pages[8]["starts_mid_question"])
+        self.assertEqual(pages[8]["context_pages"], [7])
+        self.assertEqual(pages[8]["continued_pages"], [9])
+        self.assertTrue(pages[9]["starts_mid_question"])
+        self.assertEqual(pages[9]["context_pages"], [8])
 
     def test_single_anchor_carries_stem(self):
         from apps.quiz.models import QuestionAnchor
@@ -981,6 +1042,7 @@ class QuestionContinuityTests(TestCase):
         self.assertEqual(body["qid"], "10b")
         self.assertTrue(body["starts_mid_question"])
         self.assertEqual(body["context_pages"], [1])
+        self.assertEqual(body["continued_pages"], [])
 
 
 class GenerationRetryTests(TestCase):
