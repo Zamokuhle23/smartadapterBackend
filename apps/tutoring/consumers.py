@@ -59,7 +59,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.audio_buffer = []  # barge-in: drop the incomplete utterance
             return
 
-        # -------- classic text chat --------
+        # -------- classic text chat (streamed) --------
         content = str(payload.get("content", "")).strip()
         if not content:
             return
@@ -71,21 +71,67 @@ class ChatConsumer(AsyncWebsocketConsumer):
         topic = await self._route_topic(content, self.current_topic_id)
         self.current_topic_id = topic.id if topic else None
         await self._save_message("user", content, topic=topic)
-        await self.send_json({"role": "user", "content": content, "topic_id": topic.id if topic else None})
-        try:
-            reply, meta = await database_sync_to_async(self._generate)(content)
-        except Exception as exc:  # noqa: BLE001 - never drop a turn silently
-            logger.exception("Chat reply generation failed: %s", exc)
-            await self.send_json({
-                "role": "tutor",
-                "content": ("Sorry, I could not generate a reply just now - "
-                            "please try again."),
-                "topic_id": topic.id if topic else None,
-            })
-            return
+        # Instant feedback: typing indicator first (LLM + retrieval take a
+        # while), then token frames as they generate, then text_done.
+        # The client already echoed the user's own message locally, so no
+        # user-echo frame is sent (it used to linger as a permanent ⏳).
+        await self.send_json({
+            "kind": "typing", "typing": True,
+            "topic_id": topic.id if topic else None,
+        })
+        await self._stream_text_reply(content)
+        return
+
+    async def _stream_text_reply(self, content: str):
+        """Stream one chat turn: tokens live, then save + text_done frame."""
+        loop = asyncio.get_running_loop()
+        out: asyncio.Queue = asyncio.Queue()
+        topic_id = self.current_topic_id
+
+        def producer():
+            try:
+                from .services.orchestrator import stream_chat
+                topic = self._topic_obj_sync(topic_id)
+                deltas, chunk_ids = stream_chat(self.session, content, topic=topic)
+                loop.call_soon_threadsafe(out.put_nowait, ("chunks", chunk_ids))
+                for delta in deltas:
+                    if delta:
+                        loop.call_soon_threadsafe(out.put_nowait, ("token", delta))
+            except Exception as exc:  # noqa: BLE001 - forward, then apologise below
+                loop.call_soon_threadsafe(out.put_nowait, ("error", str(exc)))
+            finally:
+                loop.call_soon_threadsafe(out.put_nowait, ("done", None))
+
+        threading.Thread(target=producer, name="chat-worker", daemon=True).start()
+
+        parts: list[str] = []
+        chunk_ids: list = []
+        while True:
+            kind, data = await out.get()
+            if kind == "done":
+                break
+            if kind == "chunks":
+                chunk_ids = list(data or [])
+            elif kind == "token":
+                parts.append(data)
+                await self.send_json({"kind": "token", "text": data})
+            elif kind == "error":
+                logger.warning("Chat stream error: %s", data)
+        reply = "".join(parts)
+        if not reply.strip():
+            reply = ("Sorry, I could not generate a reply just now - "
+                     "please try again.")
+            await self.send_json({"kind": "token", "text": reply})
+        from .services.orchestrator import _split_key_terms
+        reply, key_terms = _split_key_terms(reply)
+        topic = await database_sync_to_async(self._topic_obj)()
+        meta = {"retrieved_chunk_ids": chunk_ids, "key_terms": key_terms}
         await self._save_message("tutor", reply, meta, topic=topic)
-        await self.send_json({"role": "tutor", "content": reply, "meta": meta,
-                              "topic_id": topic.id if topic else None})
+        await self.send_json({
+            "kind": "text_done",
+            "topic_id": topic.id if topic else None,
+            "key_terms": key_terms,
+        })
 
     async def _handle_voice(self):
         pcm = b"".join(self.audio_buffer)
@@ -151,10 +197,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 else:
                     await self.send_json(ev)
         self.voice_worker_alive = False
-
-    def _generate(self, content: str):
-        from .services.orchestrator import generate_reply
-        return generate_reply(self.session, content, topic=self._topic_obj())
 
     @database_sync_to_async
     def _get_session(self, user):

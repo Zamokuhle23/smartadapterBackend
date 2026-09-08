@@ -23,13 +23,15 @@ def cosine_similarity(a, b) -> float:
     return dot / (na * nb)
 
 
-def _pgvector_retrieve(syllabus, qvec, k, subject=None):
+def _pgvector_retrieve(syllabus, qvec, k, subject=None, doc_types=None):
     """SQL KNN search over the pgvector column (PostgreSQL only)."""
     from pgvector.django import CosineDistance
 
     qs = DocumentChunk.objects.filter(syllabus=syllabus, embedding_vec__isnull=False)
     if subject is not None:
         qs = qs.filter(subject=subject)
+    if doc_types:
+        qs = qs.filter(document__doc_type__in=list(doc_types))
     return list(
         qs.select_related("document")
         .only(
@@ -49,10 +51,12 @@ def _pgvector_retrieve(syllabus, qvec, k, subject=None):
     )
 
 
-def retrieve(syllabus, query: str, k: int | None = None, subject=None):
+def retrieve(syllabus, query: str, k: int | None = None, subject=None, doc_types=None):
     """
     Return up to k chunks from `syllabus` most similar to `query`,
-    optionally restricted to one subject. Returns list[DocumentChunk].
+    optionally restricted to one subject and/or a set of document types
+    (e.g. chat searches syllabus + mark schemes + notes, never past papers -
+    those are reserved for question generation).
 
     Uses pgvector SQL search on PostgreSQL, Python cosine on SQLite.
     """
@@ -62,7 +66,14 @@ def retrieve(syllabus, query: str, k: int | None = None, subject=None):
     qvec = get_embedder().embed_query(query)
 
     if connection.vendor == "postgresql":
-        return _pgvector_retrieve(syllabus, qvec, top_k, subject)
+        return _pgvector_retrieve(syllabus, qvec, top_k, subject, doc_types)
+
+    # SQLite / portable path.
+    qs = DocumentChunk.objects.filter(syllabus=syllabus).exclude(embedding__isnull=True)
+    if subject is not None:
+        qs = qs.filter(subject=subject)
+    if doc_types:
+        qs = qs.filter(document__doc_type__in=list(doc_types))
 
     # SQLite / portable path.
     qs = DocumentChunk.objects.filter(syllabus=syllabus).exclude(embedding__isnull=True)

@@ -11,6 +11,12 @@ from apps.progress.services.dashboard import weak_objectives_for_message
 from apps.rag.services.llm import get_chat_provider
 from apps.rag.services.retriever import retrieve
 
+# Chat retrieval scope: THIS subject's syllabus + mark schemes + notes
+# (the notes bucket holds study notes and examiner reports). Past exam
+# papers are deliberately excluded here - they are searched only when
+# generating practice questions, never for chat answers.
+CHAT_DOC_TYPES = ["syllabus", "mark_scheme", "notes"]
+
 SYSTEM_TEMPLATE = """You are FundzaAI, a warm, encouraging expert tutor for Eswatini students.
 
 The student is studying:
@@ -22,8 +28,12 @@ STRICT RULES:
   gently redirect and explain that it is beyond their current syllabus.
 - If a Curriculum tier is shown, teach ONLY that tier's content and papers: Core =
   lower tier (papers 1/2, grades C-G); Extended = higher tier (papers 3/4, A*-E).
-- Ground explanations in the SYLLABUS CONTEXT below. If it is insufficient,
-  say what you know but flag it as general knowledge.
+- Base your answer on the SYLLABUS CONTEXT below (syllabus wording, mark-scheme
+  points, examiner-report tips). If the context is insufficient, say what you
+  know but flag it as general knowledge.
+- Keep replies SHORT: at most ~130 words unless the student explicitly asks for
+  detail. A few short lines or bullets, no long essays.
+- Wrap every key term, definition and formula in **bold** markdown.
 - Adapt to the learner profile below.
 
 LEARNER PROFILE (personalization):
@@ -41,8 +51,9 @@ consistent - never ask for info that is already here):
 SYLLABUS CONTEXT (retrieved for this question):
 {context}
 
-Respond in clear steps, use worked examples when helpful, and end with one short
-check-understanding question tailored to this student."""
+End your reply with exactly one short check-understanding question (one line),
+then on its own final line write KEY_TERMS followed by a colon and up to 6 key
+terms from your answer, comma-separated (e.g. KEY_TERMS: osmosis, cell wall)."""
 
 STYLE_HINTS = {
     "socratic": "Guide with questions first; let the student do each step before revealing it.",
@@ -100,7 +111,10 @@ def build_messages(session, user_text: str, topic=None) -> list[dict]:
     pace = getattr(profile, "pace", "normal") or "normal"
     language_desc = {"en": "English", "ss": "siSwati", "mix": "English with siSwati clarifications where useful"}[language]
 
-    chunks = retrieve(session.syllabus, user_text, subject=session.subject)
+    chunks = retrieve(
+        session.syllabus, user_text,
+        subject=session.subject, doc_types=CHAT_DOC_TYPES,
+    )
     context = _guarded_context(chunks) or (
         "(no indexed syllabus text matched; answer from general knowledge within scope)"
     )
@@ -188,10 +202,12 @@ def generate_reply(session, user_text: str, topic=None) -> tuple[str, dict]:
     messages, chunk_ids = build_messages(session, user_text, topic=topic)
     provider = get_chat_provider("")  # cheap chat model (tutor conversation)
     reply_text = provider.chat(messages)
+    reply_text, key_terms = _split_key_terms(reply_text)
     meta = {
         "retrieved_chunk_ids": chunk_ids,
         "provider": type(provider).__name__,
         "model": getattr(type(provider), "model", "") or "",
+        "key_terms": key_terms,
     }
     # Remember durable facts the student stated, for future turns / sessions.
     try:
@@ -200,6 +216,41 @@ def generate_reply(session, user_text: str, topic=None) -> tuple[str, dict]:
     except Exception:
         pass
     return reply_text, meta
+
+
+def _split_key_terms(reply_text: str) -> tuple[str, list[str]]:
+    """Strip the trailing KEY_TERMS line the tutor prompt requires.
+
+    Returns (clean_reply, terms). The line is a machine channel for client
+    keyword highlighting - students must never see it.
+    """
+    import re as _re
+
+    lines = (reply_text or "").rstrip().splitlines()
+    terms: list[str] = []
+    if lines:
+        m = _re.match(r"\s*KEY_TERMS\s*:\s*(.+?)\s*$", lines[-1], _re.IGNORECASE)
+        if m:
+            terms = [t.strip(" *-") for t in m.group(1).split(",")]
+            terms = [t for t in terms if t and len(t.split()) <= 4][:8]
+            lines = lines[:-1]
+    return "\n".join(lines).rstrip(), terms
+
+
+def stream_chat(session, user_text: str, topic=None):
+    """Yield reply text deltas for a chat turn (typed streaming).
+
+    Message building (incl. scoped syllabus/mark-scheme/examiner-report
+    retrieval) happens first so chunk ids are known; then tokens stream from
+    the provider. Providers fall back to one-shot internally, so callers
+    always get at least one delta. Returns (delta_iterator, chunk_ids).
+    """
+    messages, chunk_ids = build_messages(session, user_text, topic=topic)
+    provider = get_chat_provider("")  # cheap chat model (tutor conversation)
+    stream = getattr(provider, "stream", None)
+    if stream is None:
+        return iter([provider.chat(messages)]), chunk_ids
+    return stream(messages), chunk_ids
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +278,10 @@ def _voice_messages(session, user_text: str, use_rag: bool, topic=None) -> list[
             f"stay consistent and never re-ask for these):\n{mem_lines}"
         )
     if use_rag:
-        chunks = retrieve(session.syllabus, user_text, subject=session.subject)
+        chunks = retrieve(
+            session.syllabus, user_text,
+            subject=session.subject, doc_types=CHAT_DOC_TYPES,
+        )
         context = _guarded_context(chunks)
         if context:
             system += (
