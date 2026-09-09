@@ -1061,7 +1061,10 @@ def question_context(document, page_number: int,
                 fwd += 1
             else:
                 break
-    starts_mid = bool(keys_here) and all(started_earlier.values())
+    # "Mid" only when every question on this page continues from an earlier
+    # page AND at least one does (all([]) is True - that would wrongly flag a
+    # page of orphan parts whose stem is genuinely absent).
+    starts_mid = bool(started_earlier) and all(started_earlier.values())
     return starts_mid, sorted(context), sorted(continued)
 
 
@@ -1087,9 +1090,12 @@ def _prefetch_anchor_cache(documents_pages: dict[int, set[int]],
 class PracticePagesView(APIView):
     """GET ?subject_id=N&topics=a,b&limit=20 -> page queue for practice.
 
-    Distinct (document, page) pairs carrying at least one anchor, filtered
-    to PageTopic labels when given. Practice walks the queue like a paper;
-    the app renders each page with the shared viewer.
+    Serves topic-filtered pages as WHOLE real-paper runs, each run in the
+    paper's own page order (no cross-paper shuffling), so a page that begins
+    mid-question is always preceded in the queue by its stem page. A run is
+    never started on a mid-question page (its stem would be missing), so no
+    question ever "spawns" as a bare part without its context. Statement-only
+    stem pages stay read_only (nothing answerable, no submit).
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -1124,31 +1130,30 @@ class PracticePagesView(APIView):
                 label_q |= _Q(document__page_topics__label__iexact=label,
                               document__page_topics__page_number=_F("page_number"))
             pages = pages.filter(label_q)
-        # DISTINCT can duplicate pairs when the anchor join fans out
-        # (one row per anchor qid), so over-fetch and dedupe pairs here.
-        rows = list(pages.order_by("?")[:limit * 5])
-        seen = {}
-        for r in rows:
-            seen.setdefault((r["document_id"], r["page_number"]), r)
-        rows = list(seen.values())[:limit]
-        if not rows:
+        # DISTINCT can duplicate pairs when the anchor join fans out (one row
+        # per anchor qid), so collect and dedupe pairs explicitly.
+        pairs = set()
+        for r in pages:
+            pairs.add((r["document_id"], r["page_number"]))
+        if not pairs:
             return Response({"detail": "no_questions"}, status=404)
+        doc_ids = {d for d, _ in pairs}
         docs = {d.id: d for d in SyllabusDocument.objects.filter(
-            id__in={r["document_id"] for r in rows}).select_related("subject")}
-        # Prefetch anchors around the served pages so stem/continuation
+            id__in=doc_ids).select_related("subject")}
+        # Prefetch anchors around the selected pages so stem/continuation
         # detection stays at one query per document instead of per page.
         doc_pages: dict[int, set[int]] = {}
-        for r in rows:
-            doc_pages.setdefault(r["document_id"], set()).add(r["page_number"])
+        for d, p in pairs:
+            doc_pages.setdefault(d, set()).add(p)
         anchor_cache = _prefetch_anchor_cache(doc_pages)
-        # Prefetch page labels for served + neighbouring pages in one query.
+        # Prefetch page labels for the selected pages in one query.
         label_map: dict[tuple[int, int], str] = {}
         for doc_id, page_no, lab in PageTopic.objects.filter(
                 document_id__in=set(doc_pages)).values_list(
                 "document_id", "page_number", "label"):
             label_map.setdefault((doc_id, page_no), lab)
 
-        def page_entry(doc, page_no) -> dict:
+        def page_entry(doc, page_no, kept: set[int]) -> dict:
             starts_mid, context_pages, continued_pages = question_context(
                 doc, page_no, anchor_cache)
             qids = anchor_cache.get((doc.id, page_no), [])
@@ -1167,11 +1172,14 @@ class PracticePagesView(APIView):
                         read_only = True
                         break
                     page += 1
+            # "continued" only counts when the later page is itself in the
+            # served run - i.e. the next screen genuinely carries the rest.
+            continued_pages = [p for p in continued_pages if p in kept]
             return {
                 "doc_id": doc.id,
                 "page_number": page_no,
                 "starts_mid_question": starts_mid,
-                "context_pages": context_pages,
+                "context_pages": [p for p in context_pages if p in kept],
                 "continued_pages": continued_pages,
                 # Statement-only stem page (bare head, question continues
                 # later): no answerable parts here, client shows it
@@ -1186,32 +1194,35 @@ class PracticePagesView(APIView):
                 "source": doc.source,
             }
 
-        # Swipe order: each stem page is its own entry immediately before
-        # its continuation (never stacked, never orphaned). Stems dedupe:
-        # a page already placed stays where it is.
-        ordered: list[tuple[str, dict]] = []
-        seen_entries: set[tuple[int, int]] = set()
-        for r in rows:
-            doc = docs.get(r["document_id"])
+        def doc_run(doc_id: int) -> list[dict]:
+            """Sorted page run for one paper, minus any orphan start."""
+            doc = docs.get(doc_id)
             if doc is None:
-                continue
-            main = page_entry(doc, r["page_number"])
-            for stem_page in main["context_pages"]:
-                key = (doc.id, stem_page)
-                if key not in seen_entries:
-                    seen_entries.add(key)
-                    ordered.append(("stem", page_entry(doc, stem_page)))
-            key = (doc.id, r["page_number"])
-            if key not in seen_entries:
-                seen_entries.add(key)
-                ordered.append(("main", main))
-        # Honor the limit without ever stranding a continuation: drop
-        # trailing mains first, never stems.
-        while len(ordered) > limit:
-            for i in range(len(ordered) - 1, -1, -1):
-                if ordered[i][0] == "main":
-                    ordered.pop(i)
-                    break
-            else:
+                return []
+            sel = sorted(doc_pages[doc_id])
+            kept = set(sel)
+            run = [page_entry(doc, pno, kept) for pno in sel]
+            # Never start a run on a page that begins mid-question: its stem
+            # page is not in this run, so the parts would spawn with no
+            # context. (Later mid pages are fine - their stems precede them.)
+            while run and run[0]["starts_mid_question"]:
+                run.pop(0)
+            return run
+
+        out: list[dict] = []
+        for doc_id in sorted(doc_pages):
+            if len(out) >= limit:
                 break
-        return Response({"pages": [entry for _, entry in ordered]})
+            run = doc_run(doc_id)
+            if not run:
+                continue
+            if len(out) + len(run) > limit:
+                # Never split a run across the limit (would orphan the tail);
+                # a lone oversized run is capped at the limit.
+                if not out:
+                    out = run[:limit]
+                break
+            out.extend(run)
+        if not out:
+            return Response({"detail": "no_questions"}, status=404)
+        return Response({"pages": out})

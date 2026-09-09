@@ -1057,6 +1057,9 @@ class QuestionContinuityTests(TestCase):
     def test_stem_precedes_continuation_in_order(self):
         from apps.quiz.models import PageTopic
         PageTopic.objects.create(
+            document=self.doc, page_number=10, label="TargetSeven",
+            confidence=1.0)
+        PageTopic.objects.create(
             document=self.doc, page_number=11, label="TargetSeven",
             confidence=1.0)
         pages = self._ordered(topics="TargetSeven", limit=10)
@@ -1065,6 +1068,19 @@ class QuestionContinuityTests(TestCase):
             [(10, True), (11, False)])
         self.assertEqual(pages[1]["context_pages"], [10])
         self.assertTrue(pages[1]["starts_mid_question"])
+
+    def test_orphan_parts_without_stem_are_not_served(self):
+        # Only page 11 is tagged: Q7's stem page 10 is outside the run, so
+        # serving page 11 would spawn "7a" with no context. The run must be
+        # dropped entirely (no questions), never an orphan.
+        from apps.quiz.models import PageTopic
+        PageTopic.objects.create(
+            document=self.doc, page_number=11, label="TargetSeven",
+            confidence=1.0)
+        response = self.client.get(
+            f"/api/quiz/practice/pages/?subject_id={self.subject.id}"
+            "&topics=TargetSeven&limit=10")
+        self.assertEqual(response.status_code, 404)
 
     def test_single_anchor_carries_stem(self):
         from apps.quiz.models import QuestionAnchor
