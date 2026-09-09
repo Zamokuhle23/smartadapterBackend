@@ -120,6 +120,9 @@ mirror the exam proportion in practice:
   e.g. EGCSE 4 papers vs IGCSE 3, or vice versa). If you cannot determine an
   equivalent, use the same paper number.
 - If this subject is tiered, only list the papers of the {tier_text}.
+- EGCSE papers are numbered ONLY {valid_papers} - use exactly these numbers,
+  never invent papers 5/6 (those belong to Cambridge IGCSE, whose equivalents
+  you record per paper in igcse_equivalent_papers).
 
 Return ONLY valid JSON, no fences:
 {{"papers": [{{"paper_number": 4, "label": "Paper 4 (Practical)", "weight_pct": 10,
@@ -923,9 +926,10 @@ def get_exam_proposition(subject, tier: str = "") -> dict:
     from apps.syllabus.services.subject_map import tier_label, tier_papers
 
     papers_hint = tier_papers(tier) if tier else None
+    valid = sorted(papers_hint) if papers_hint else [1, 2, 3, 4]
     tier_text = tier_label(tier) if tier else "full subject (all papers)"
     if papers_hint:
-        tier_text += f" - only papers {', '.join(map(str, papers_hint))}"
+        tier_text += f" - only papers {', '.join(map(str, valid))}"
 
     context_chunks = retrieve(
         subject.syllabus,
@@ -941,12 +945,13 @@ def get_exam_proposition(subject, tier: str = "") -> dict:
         raw = _chat(
             [
                 {"role": "system", "content": "You describe exam structures precisely. Output ONLY valid JSON."},
-                {"role": "user", "content": EXAM_PROPOSITION_PROMPT.format(
+                {"role": "user",                 "content": EXAM_PROPOSITION_PROMPT.format(
                     level=subject.syllabus.get_level_display(),
                     subject_name=subject.name,
                     subject_code=subject.code,
                     context=_build_context(context_chunks)[:4000] or "(no indexed corpus)",
                     tier_text=tier_text,
+                    valid_papers=", ".join(map(str, valid)),
                 )},
             ]
         )
@@ -962,10 +967,14 @@ def get_exam_proposition(subject, tier: str = "") -> dict:
 
 def _normalise_proposition(subject, data: dict | None, tier: str,
                            papers_hint: list | None) -> dict:
-    """Sanitise the LLM proposition (or equal-split fallback across papers)."""
+    """Sanitise the LLM proposition (or equal-split fallback across papers).
+
+    EGCSE papers are always 1-4 (core 1,2 / extended 3,4): anything outside
+    is a hallucinated IGCSE number and is dropped.
+    """
 
     def fallback() -> list:
-        nums = papers_hint or [1, 2, 3, 4]
+        nums = sorted(papers_hint) if papers_hint else [1, 2, 3, 4]
         per = round(100 / len(nums), 1)
         return [
             {
@@ -983,7 +992,7 @@ def _normalise_proposition(subject, data: dict | None, tier: str,
         return {"papers": fallback()}
 
     papers = []
-    allowed = set(papers_hint) if papers_hint else None
+    allowed = set(papers_hint) if papers_hint else {1, 2, 3, 4}
     for p in data["papers"]:
         if not isinstance(p, dict):
             continue
@@ -991,9 +1000,9 @@ def _normalise_proposition(subject, data: dict | None, tier: str,
             number = int(p.get("paper_number"))
         except (TypeError, ValueError):
             continue
-        if allowed is not None and number not in allowed:
+        if number not in allowed:
             continue
-        if not (1 <= number <= 6):
+        if not (1 <= number <= 4):
             continue
         fmt = str(p.get("format", "structured")).lower()
         if fmt not in ("mcq", "structured", "practical"):

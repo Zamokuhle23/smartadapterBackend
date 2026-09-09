@@ -1763,7 +1763,7 @@ confidence=0.9, requires_figure=True)
                       return_value=None) as gen:
             session = start_smart_session(self.user, self.subject, ["Algebra"], count=2)
             item = serve_next(session)
-        # Anchor dropped after 3 variants: a syllabus-only fallback (no source anchor).
+# Anchor dropped after 3 variants: a syllabus-only fallback (no source anchor).
         self.assertIsNotNone(item)
         self.assertEqual(item["kind"], "variant")
         self.assertIsNone(item["anchor_id"])
@@ -1774,3 +1774,34 @@ confidence=0.9, requires_figure=True)
         self.assertIn("papers", prop)
         self.assertAlmostEqual(
             sum(p["weight_pct"] for p in prop["papers"]), 100, delta=1)
+
+    def test_proposition_drops_hallucinated_papers(self):
+        from apps.quiz.services.generator import _normalise_proposition
+        prop = _normalise_proposition(self.subject, {
+            "papers": [
+                {"paper_number": 2, "label": "Paper 2", "weight_pct": 30,
+                 "format": "structured", "duration_minutes": 90,
+                 "igcse_equivalent_papers": [2]},
+                {"paper_number": 5, "label": "Paper 5 (Paper 4)",
+                 "weight_pct": 40, "format": "structured",
+                 "duration_minutes": 60, "igcse_equivalent_papers": [4]},
+                {"paper_number": 6, "label": "Paper 6 (Paper 5)",
+                 "weight_pct": 30, "format": "practical",
+                 "duration_minutes": 90, "igcse_equivalent_papers": [3]},
+            ]}, "", None)
+        nums = [p["paper_number"] for p in prop["papers"]]
+        self.assertEqual(nums, [2])
+        self.assertAlmostEqual(prop["papers"][0]["weight_pct"], 100, delta=1)
+
+    def test_empty_slot_falls_back_to_other_paper(self):
+        from apps.quiz.models import PracticeSession
+        from apps.quiz.services.smart import serve_next
+        with patch("apps.quiz.services.smart.get_exam_proposition", return_value=self._prop()):
+            session = PracticeSession.objects.create(
+                student=self.user, subject=self.subject, topics=["Algebra"],
+                total_questions=2, plan=[3, 3])
+            item = serve_next(session)
+        # Paper 3 has no anchors here: serves the unseen paper-2 anchor.
+        self.assertEqual(item["kind"], "anchor")
+        self.assertEqual(item["label"], "4a")
+        self.assertEqual(item["paper_number"], 2)

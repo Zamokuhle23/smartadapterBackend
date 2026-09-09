@@ -81,6 +81,32 @@ def _pool_for_paper(subject, paper_number: int, topics: list[Topic]) -> list[Que
     return list(qs[:400])
 
 
+def _pool_any_paper(subject, topics: list[Topic], exclude_paper: int | None = None,
+                    ) -> list[QuestionAnchor]:
+    """Unseen-anchor fallback across papers (keeps real questions flowing)."""
+    qs = QuestionAnchor.objects.filter(
+        document__subject=subject,
+        document__doc_type="past_paper",
+        kind="text",
+        requires_figure=False,
+    )
+    if exclude_paper is not None:
+        qs = qs.exclude(document__paper_number=exclude_paper)
+    if topics:
+        labels = set(PageTopic.objects.filter(
+            document__subject=subject
+        ).values_list("label", flat=True))
+        matching = {lab for lab in labels if canonical_key(lab) in {
+            canonical_key(t.title) for t in topics}}
+        if not matching:
+            return []
+        qs = qs.filter(
+            document__page_topics__label__in=list(matching),
+            document__page_topics__page_number=F("page_number"),
+        )
+    return list(qs[:400])
+
+
 def _seen_anchor_ids(student) -> set[int]:
     return set(PaperAttempt.objects.filter(student=student).values_list("anchor_id", flat=True))
 
@@ -119,20 +145,23 @@ def _generate_text_variant(subject, anchor: QuestionAnchor | None,
     else:
         topics = _labels_to_topics(subject, topic_labels or [])
     topic_ids = [t.id for t in topics] or None
-    try:
-        questions = generate_questions(subject, count=3, tier=tier, topic_ids=topic_ids)
-    except QuizGenerationError:
-        return None
-    for q in questions:
-        if q.figures.exists():
-            q.figures.clear()
-        if _is_bare_diagram_reference(q):
-            q.delete()
+    # Retry: figure-heavy topics often come back diagram-tied; fresh samples
+    # usually yield a clean text-only question within a few tries.
+    for _ in range(3):
+        try:
+            questions = generate_questions(subject, count=3, tier=tier, topic_ids=topic_ids)
+        except QuizGenerationError:
             continue
-        if anchor is not None:
-            q.source_anchor = anchor
-            q.save(update_fields=["source_anchor"])
-        return q
+        for q in questions:
+            if q.figures.exists():
+                q.figures.clear()
+            if _is_bare_diagram_reference(q):
+                q.delete()
+                continue
+            if anchor is not None:
+                q.source_anchor = anchor
+                q.save(update_fields=["source_anchor"])
+            return q
     return None
 
 
@@ -218,22 +247,31 @@ def serve_next(session: PracticeSession, tier: str = "") -> dict | None:
     if anchor is not None:
         item = _anchor_item(anchor, index, paper_label)
     else:
-        # No fresh anchor: generate a variant from a seen anchor still under
-        # its limit; otherwise a syllabus-only question on the selected topics
-        # (never exceed the variant limit - the student moves to other papers).
-        seen = _seen_anchor_ids(session.student)
-        eligible_sources = [
-            a for a in pool if a.id in seen
-            and _variant_count(session.student, a.id) < session.variant_limit
-        ]
-        source = random.choice(eligible_sources) if eligible_sources else None
-        question = _generate_text_variant(
-            session.subject, source, tier, topic_labels=session.topics)
-        if question is not None:
-            item = _variant_item(question, source, index, paper_number, paper_label)
+        # No fresh anchor in this paper's pool: prefer an unseen anchor from
+        # any other paper (real questions first, no LLM cost); then a variant
+        # of a seen anchor still under its limit; only then give up.
+        # (A syllabus-only variant is generated only when a seen source or
+        # an empty pool forces it - see below.)
+        other = _pick_anchor(
+            _pool_any_paper(session.subject, topics, exclude_paper=paper_number),
+            session.student, session.variant_limit)
+        if other is not None:
+            item = _anchor_item(other, index, _paper_label(
+                session.subject, other.document.paper_number or 1))
         else:
-            item = {
-                "index": index, "kind": "variant", "anchor_id": None,
+            seen = _seen_anchor_ids(session.student)
+            eligible_sources = [
+                a for a in pool if a.id in seen
+                and _variant_count(session.student, a.id) < session.variant_limit
+            ]
+            source = random.choice(eligible_sources) if eligible_sources else None
+            question = _generate_text_variant(
+                session.subject, source, tier, topic_labels=session.topics)
+            if question is not None:
+                item = _variant_item(question, source, index, paper_number, paper_label)
+            else:
+                item = {
+                    "index": index, "kind": "variant", "anchor_id": None,
                 "question_id": None, "label": f"Q{index + 1}",
                 "paper_number": paper_number, "paper_label": paper_label,
                 "marks": 0, "question": None, "slice": None, "answered": False,
