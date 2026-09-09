@@ -756,16 +756,19 @@ class PaperAnchorsView(APIView):
 
 class PaperPagePartsView(APIView):
     """GET /api/quiz/paper/<doc_id>/page/<page_no>/parts/ -> one page's
-    anchors with their question text, for text-form follow-up pages.
+    anchors with readable text plus an LLM variant per part.
 
     The app renders follow-up (continuation) pages as a text list instead of
-    the PDF bitmap; each part opens the standard answer sheet on tap.
+    the PDF bitmap: each part shows its variant question (same skill, new
+    wording, never referencing a diagram), falling back to the cleaned
+    scraped text. Variants generate once per page, then cache forever.
     """
 
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, doc_id, page_no):
-        from apps.quiz.services.cropper import anchor_marks, anchor_text
+        from apps.quiz.services.cropper import anchor_marks, anchor_text, clean_part_text
+        from apps.quiz.services.smart import generate_part_variants
         from apps.syllabus.models import SyllabusDocument
 
         try:
@@ -778,19 +781,31 @@ class PaperPagePartsView(APIView):
         ).first() is None:
             return Response({"detail": "Not enrolled in this subject"},
                             status=403)
+        anchors = list(QuestionAnchor.objects.filter(
+            document=doc, page_number=page_no).order_by("qid"))
+        try:
+            variants = generate_part_variants(doc, page_no)
+        except Exception:  # noqa: BLE001 - fall back to cleaned text
+            variants = {}
         out = []
-        for anchor in QuestionAnchor.objects.filter(
-                document=doc, page_number=page_no).order_by("qid"):
+        for anchor in anchors:
             try:
                 text = anchor_text(doc.file.path, page_no, anchor.bbox)
             except Exception:  # noqa: BLE001
                 text = ""
             marks = anchor_marks(text) or anchor.marks or 2
+            variant = variants.get(anchor.qid)
             out.append({
                 "qid": anchor.qid,
                 "kind": anchor.kind,
                 "marks": marks,
                 "text": text,
+                "clean_text": clean_part_text(text),
+                "variant": (
+                    {"id": variant.id,
+                     "question_text": variant.question_text,
+                     "marks": variant.marks}
+                    if variant is not None else None),
             })
         return Response(out)
 
@@ -832,6 +847,18 @@ class PaperAnswerView(APIView):
         marks = anchor_marks(text) or anchor.marks or 2
         self._ensure_keys(doc, anchor, text)
 
+        # Answering the displayed variant (follow-up text form): grade
+        # against the variant's own marking guidance, not the anchor's.
+        variant = None
+        variant_qid = request.data.get("variant_question_id")
+        if variant_qid is not None:
+            try:
+                variant = QuizQuestion.objects.select_related("objective").get(
+                    pk=int(variant_qid), source_anchor=anchor)
+            except (QuizQuestion.DoesNotExist, TypeError, ValueError):
+                return Response({"detail": "Unknown variant question"},
+                                status=400)
+
         latency_ms = request.data.get("latency_ms")
         awarded = max_marks = None
         feedback = ""
@@ -870,9 +897,14 @@ class PaperAnswerView(APIView):
                         image_b64=drawing_b64,
                     )
                 else:
+                    guidance = (variant.marking_guidance
+                                if variant is not None and variant.marking_guidance
+                                else anchor.marking_guidance or "(none supplied)")
                     awarded, max_marks, feedback = grade_text(
-                        question_text=text or f"Paper Q{anchor.qid}",
-                        guidance=anchor.marking_guidance or "(none supplied)",
+                        question_text=(
+                            variant.question_text if variant is not None
+                            else text or f"Paper Q{anchor.qid}"),
+                        guidance=guidance,
                         marks=marks,
                         answer_text=answer_text,
                     )
@@ -888,6 +920,30 @@ class PaperAnswerView(APIView):
             correct=correct,
             latency_ms=latency_ms,
         )
+        if variant is not None:
+            # The variant counts as an attempt on its own question too, so
+            # mastery tracks concept grasp (and variant rotation counting).
+            QuizAttempt.objects.create(
+                student=request.user,
+                question=variant,
+                answer_text=request.data.get("answer_text") or "",
+                awarded_marks=awarded,
+                feedback=feedback,
+                correct=correct,
+                latency_ms=latency_ms,
+            )
+            if variant.objective is not None:
+                MasteryEvent.objects.create(
+                    student=request.user, objective=variant.objective,
+                    correct=correct, latency_ms=latency_ms)
+                record, _created = MasteryRecord.objects.get_or_create(
+                    student=request.user, objective=variant.objective,
+                    defaults={"subject": variant.subject})
+                record.attempts += 1
+                if correct:
+                    record.correct_count += 1
+                record.mastery = update_mastery(record.mastery, correct)
+                record.save(update_fields=["attempts", "correct_count", "mastery"])
         if drawing_b64:
             from django.core.files.base import ContentFile
             import base64
@@ -907,7 +963,10 @@ class PaperAnswerView(APIView):
                 "awarded_marks": awarded,
                 "max_marks": int(max_marks) if max_marks is not None else None,
                 "feedback": feedback,
-                "model_answer": anchor.marking_guidance or "",
+                "model_answer": (
+                    variant.marking_guidance if variant is not None
+                    and variant.marking_guidance
+                    else anchor.marking_guidance or ""),
             }
         )
 

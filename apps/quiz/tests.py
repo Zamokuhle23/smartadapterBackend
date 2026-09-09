@@ -831,20 +831,37 @@ class PaperPagePartsTests(TestCase):
             bbox=[0.0, 100.0, 595.0, 400.0], kind="text", confidence=0.9)
         QuestionAnchor.objects.create(
             document=self.doc, qid="4b", page_number=4,
-            bbox=[0.0, 410.0, 595.0, 500.0], kind="text", confidence=0.9)
+            bbox=[0.0, 410.0, 595.0, 500.0], kind="drawing", confidence=0.9)
+        # A real PDF so anchor_text/file.path work in tests.
+        import io
+
+        import pymupdf
+        from django.core.files.base import ContentFile
+
+        pdf = pymupdf.open()
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Name the angle. [2]")
+        buf = io.BytesIO()
+        pdf.save(buf)
+        buf.seek(0)
+        self.doc.file.save("parts.pdf", ContentFile(buf.read()), save=True)
 
     def test_parts_shape(self):
         from unittest.mock import patch
 
         with patch("apps.quiz.services.cropper.anchor_text",
-                   return_value="Name the angle. [2]"):
+                   return_value="Name the angle. [2]"), patch(
+            "apps.quiz.services.smart.generate_part_variants",
+                return_value={}):
             response = self.client.get(
                 f"/api/quiz/paper/{self.doc.id}/page/4/parts/")
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual([p["qid"] for p in body], ["4a", "4b"])
         self.assertTrue(all("text" in p and "marks" in p for p in body))
+        self.assertTrue(all("clean_text" in p and "variant" in p for p in body))
         self.assertEqual(body[0]["marks"], 2)
+        self.assertEqual(body[0]["clean_text"], "Name the angle. [2]")
 
     def test_unknown_document_rejected(self):
         response = self.client.get("/api/quiz/paper/99999/page/4/parts/")
@@ -861,6 +878,75 @@ class PaperPagePartsTests(TestCase):
         client.force_authenticate(stranger)
         response = client.get(f"/api/quiz/paper/{self.other_doc.id}/page/1/parts/")
         self.assertEqual(response.status_code, 403)
+
+    def test_clean_part_text(self):
+        from apps.quiz.services.cropper import clean_part_text
+
+        raw = ("(ii)\t.Explain why bubbles were seen.\n"
+               "????????????????????????????????????\n"
+               "ECESWA 2023\n6884/04/O/N/2023\n[Total: 20]")
+        cleaned = clean_part_text(raw)
+        self.assertIn("(ii)", cleaned)
+        self.assertIn("Explain why bubbles were seen.", cleaned)
+        self.assertNotIn("?", cleaned)
+        self.assertNotIn("Total", cleaned)
+        self.assertNotIn("6884/04", cleaned)
+
+    def test_part_variants_cached_per_page(self):
+        from unittest.mock import patch
+
+        from apps.quiz.models import QuizQuestion
+        from apps.quiz.services.smart import generate_part_variants
+
+        payload = ('[{"qid": "4a", "question": "Define an angle.", "marks": 2,'
+                   ' "marking_guidance": "One mark for definition."}]')
+        with patch("apps.quiz.services.smart._chat", return_value=payload), patch(
+            "apps.quiz.services.smart.anchor_text",
+                return_value="Name the angle. [2]"):
+            made = generate_part_variants(self.doc, 4)
+        self.assertIn("4a", made)
+        variant = made["4a"]
+        self.assertEqual(variant.question_text, "Define an angle.")
+        self.assertEqual(variant.source_anchor.qid, "4a")
+        # Second call reuses the cached row (no new LLM row).
+        with patch("apps.quiz.services.smart._chat",
+                   side_effect=AssertionError("must not call LLM")):
+            made2 = generate_part_variants(self.doc, 4)
+        self.assertEqual(made2["4a"].id, variant.id)
+        self.assertEqual(
+            QuizQuestion.objects.filter(source_anchor__document=self.doc).count(), 1)
+
+    def test_variant_answer_grades_against_variant(self):
+        from unittest.mock import patch
+
+        from apps.quiz.models import PaperAttempt, QuizAttempt, QuizQuestion
+
+        variant = QuizQuestion.objects.create(
+            subject=self.subject, format="structured", marks=2,
+            question_text="Define an angle differently.",
+            marking_guidance="One mark for definition.")
+        from apps.quiz.models import QuestionAnchor
+        anchor = QuestionAnchor.objects.get(document=self.doc, qid="4a")
+        variant.source_anchor = anchor
+        variant.save(update_fields=["source_anchor"])
+        with patch("apps.quiz.api.grade_text",
+                   return_value=(2.0, 2.0, "Good.")), patch(
+            "apps.quiz.api.PaperAnswerView._ensure_keys",
+        ):
+            response = self.client.post(
+                "/api/quiz/paper/answer/",
+                {"doc_id": self.doc.id, "qid": "4a",
+                 "answer_text": "An angle is ...",
+                 "variant_question_id": variant.id},
+                format="json")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["model_answer"], "One mark for definition.")
+        # Anchor marked seen AND variant attempted (mastery path).
+        self.assertTrue(PaperAttempt.objects.filter(
+            student=self.user, anchor=anchor).exists())
+        self.assertTrue(QuizAttempt.objects.filter(
+            student=self.user, question=variant).exists())
 
 
 class TaggingTests(TestCase):

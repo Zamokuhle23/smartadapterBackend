@@ -644,3 +644,41 @@ def anchor_marks(text: str) -> int | None:
 
     marks = re.findall(r"\[(\d{1,2})\]", text or "")
     return int(marks[-1]) if marks else None
+
+
+# Noise stripped when scraped part text is shown or fed to variant generation:
+# dotted answer leaders (often extracted as ?/. runs), tabs, paper furniture
+# ("ECESWA 2023", session codes, "[Total: N]"), repeated blank lines.
+_DOT_RUN = re.compile(r"[.?·•\-_]{4,}")
+_TOTAL_LINE = re.compile(r"\[total\s*:\s*\d+\]", re.IGNORECASE)
+_SESSION_CODE = re.compile(r"\b\d{4}/\d{2}/[A-Z]/[A-Z]/\d{4}\b")
+_EXAM_BOARD_LINE = re.compile(r"^\s*ECESWA\s+\d{4}\s*$", re.IGNORECASE)
+
+
+def clean_part_text(text: str) -> str:
+    """Readable question text from raw scraped anchor text.
+
+    Keeps the question wording and [N] mark allocations; drops dotted answer
+    lines, tabs, exam furniture and blank-line noise.
+    """
+    if not text:
+        return ""
+    out_lines = []
+    for line in text.splitlines():
+        line = line.replace("\t", " ").strip()
+        line = _DOT_RUN.sub("", line)
+        line = _TOTAL_LINE.sub("", line)
+        line = _SESSION_CODE.sub("", line)
+        if _EXAM_BOARD_LINE.match(line):
+            continue
+        if FOOTER.search(line):
+            continue
+        # Collapse spaces, drop trailing dot/space runs (answer leaders),
+        # drop leading leader residue - but keep sentence punctuation.
+        line = re.sub(r" {2,}", " ", line).strip()
+        line = re.sub(r"[. ]{2,}$", "", line).lstrip(". ").strip()
+        if line:
+            out_lines.append(line)
+    cleaned = "\n".join(out_lines)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned

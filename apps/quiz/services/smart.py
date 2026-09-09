@@ -24,9 +24,11 @@ from apps.syllabus.models import Topic
 from apps.syllabus.services.topic_labels import canonical_key
 
 from ..models import PageTopic, PaperAttempt, PracticeSession, QuestionAnchor, QuizAttempt, QuizQuestion
-from .cropper import anchor_marks, anchor_text
+from .cropper import anchor_marks, anchor_text, clean_part_text
 from .generator import (
     QuizGenerationError,
+    _chat,
+    _extract_json_array,
     extract_keys,
     find_mark_scheme,
     generate_questions,
@@ -163,6 +165,112 @@ def _generate_text_variant(subject, anchor: QuestionAnchor | None,
                 q.save(update_fields=["source_anchor"])
             return q
     return None
+
+
+PART_VARIANT_PROMPT = """You are an experienced Eswatini examiner writing text-only
+practice variants of real past-paper parts. Rewrite EACH part below as a fresh
+question testing the SAME skill and command words, with DIFFERENT numbers,
+names and context where applicable.
+
+HARD RULES:
+- Text only: NEVER mention or require any diagram, figure, table, graph,
+  image or data not printed in the question itself.
+- Keep the same marks as the original part (shown in brackets).
+- Reply with ONLY a JSON array, no fences:
+  [{{"qid": "4a", "question": "...", "marks": 2, "marking_guidance": "..."}}]
+  marking_guidance = short model answer + how marks are awarded.
+
+SUBJECT: {subject_name} ({subject_code}){topic_line}
+PARTS:
+{parts}"""
+
+
+def generate_part_variants(doc, page_no: int) -> dict[str, QuizQuestion]:
+    """One LLM call producing text-only variants for a page's text parts.
+
+    Results persist as QuizQuestion rows linked by source_anchor, so repeat
+    views are instant. Parts that already have a variant are skipped.
+    Returns {qid: QuizQuestion}.
+    """
+    anchors = list(QuestionAnchor.objects.filter(
+        document=doc, page_number=page_no, kind="text").order_by("qid"))
+    have = {q.source_anchor_id: q for q in QuizQuestion.objects.filter(
+        source_anchor__in=[a.id for a in anchors])}
+    todo = []
+    for anchor in anchors:
+        if anchor.id in have:
+            continue
+        try:
+            text = anchor_text(doc.file.path, page_no, anchor.bbox)
+        except Exception:  # noqa: BLE001
+            continue
+        cleaned = clean_part_text(text)
+        if not cleaned:
+            continue
+        marks = anchor_marks(text) or anchor.marks or 2
+        todo.append((anchor, cleaned, marks))
+    made: dict[str, QuizQuestion] = {
+        a.qid: have[a.id] for a in anchors if a.id in have}
+    if not todo:
+        return made
+    label = PageTopic.objects.filter(
+        document=doc, page_number=page_no).values_list(
+        "label", flat=True).first() or ""
+    parts_block = "\n---\n".join(
+        f"[{a.qid}] ({marks} marks)\n{cleaned}"
+        for a, cleaned, marks in todo)
+    try:
+        raw = _chat([
+            {"role": "system", "content": (
+                "You write syllabus-accurate exam questions. Output ONLY valid JSON.")},
+            {"role": "user", "content": PART_VARIANT_PROMPT.format(
+                subject_name=doc.subject.name if doc.subject else "",
+                subject_code=doc.subject.code if doc.subject else "",
+                topic_line=f"\nTOPIC: {label}" if label else "",
+                parts=parts_block[:6000],
+            )},
+        ])
+        items = _extract_json_array(raw)
+    except QuizGenerationError:
+        return made
+    by_qid = {a.qid: a for a, _, _ in todo}
+    objective = None
+    if label and doc.subject is not None:
+        from apps.syllabus.models import LearningObjective
+        objective = LearningObjective.objects.filter(
+            topic__subject=doc.subject, topic__title__iexact=label).first()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("qid", ""))
+        anchor = by_qid.get(qid)
+        question_text = str(item.get("question", "")).strip()
+        if anchor is None or not question_text:
+            continue
+        if _is_bare_diagram_reference_text(question_text):
+            continue
+        try:
+            marks = max(1, min(25, int(item.get("marks") or 2)))
+        except (TypeError, ValueError):
+            marks = 2
+        made[qid] = QuizQuestion.objects.create(
+            subject=doc.subject,
+            objective=objective,
+            topic_title=label,
+            format=QuizQuestion.Format.STRUCTURED,
+            question_text=question_text,
+            marks=marks,
+            marking_guidance=str(item.get("marking_guidance", "")),
+            adapted_from_past_paper=True,
+            source_anchor=anchor,
+        )
+    return made
+
+
+def _is_bare_diagram_reference_text(text: str) -> bool:
+    """Figure-reference check for not-yet-persisted variant text."""
+    from .generator import _BARE_REFERENCE_RE
+    return bool(_BARE_REFERENCE_RE.search(text or ""))
 
 
 def _anchor_slice(anchor: QuestionAnchor) -> dict:
