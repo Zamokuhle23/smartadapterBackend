@@ -754,6 +754,47 @@ class PaperAnchorsView(APIView):
         })
 
 
+class PaperPagePartsView(APIView):
+    """GET /api/quiz/paper/<doc_id>/page/<page_no>/parts/ -> one page's
+    anchors with their question text, for text-form follow-up pages.
+
+    The app renders follow-up (continuation) pages as a text list instead of
+    the PDF bitmap; each part opens the standard answer sheet on tap.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, doc_id, page_no):
+        from apps.quiz.services.cropper import anchor_marks, anchor_text
+        from apps.syllabus.models import SyllabusDocument
+
+        try:
+            doc = SyllabusDocument.objects.select_related("subject").get(
+                pk=doc_id)
+        except SyllabusDocument.DoesNotExist:
+            return Response({"detail": "Unknown document"}, status=404)
+        if doc.subject is not None and Enrollment.objects.filter(
+            student=request.user, subject=doc.subject
+        ).first() is None:
+            return Response({"detail": "Not enrolled in this subject"},
+                            status=403)
+        out = []
+        for anchor in QuestionAnchor.objects.filter(
+                document=doc, page_number=page_no).order_by("qid"):
+            try:
+                text = anchor_text(doc.file.path, page_no, anchor.bbox)
+            except Exception:  # noqa: BLE001
+                text = ""
+            marks = anchor_marks(text) or anchor.marks or 2
+            out.append({
+                "qid": anchor.qid,
+                "kind": anchor.kind,
+                "marks": marks,
+                "text": text,
+            })
+        return Response(out)
+
+
 class PaperAnswerView(APIView):
     """POST {doc_id, qid, answer_text?, selected_index?, drawing?, latency_ms?}.
 

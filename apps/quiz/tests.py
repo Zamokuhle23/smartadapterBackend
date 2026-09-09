@@ -806,6 +806,63 @@ class PaperAnswerTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class PaperPagePartsTests(TestCase):
+    """Text-form follow-up pages: one page's anchors with question text."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+        self.user = User.objects.create_user("partstest", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        from apps.quiz.models import QuestionAnchor
+        from apps.syllabus.models import SyllabusDocument
+
+        self.doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP 2024",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE, year=2024, paper_number=2)
+        self.other_doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP Other",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE, year=2023, paper_number=2)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="4a", page_number=4,
+            bbox=[0.0, 100.0, 595.0, 400.0], kind="text", confidence=0.9)
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="4b", page_number=4,
+            bbox=[0.0, 410.0, 595.0, 500.0], kind="text", confidence=0.9)
+
+    def test_parts_shape(self):
+        from unittest.mock import patch
+
+        with patch("apps.quiz.services.cropper.anchor_text",
+                   return_value="Name the angle. [2]"):
+            response = self.client.get(
+                f"/api/quiz/paper/{self.doc.id}/page/4/parts/")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([p["qid"] for p in body], ["4a", "4b"])
+        self.assertTrue(all("text" in p and "marks" in p for p in body))
+        self.assertEqual(body[0]["marks"], 2)
+
+    def test_unknown_document_rejected(self):
+        response = self.client.get("/api/quiz/paper/99999/page/4/parts/")
+        self.assertEqual(response.status_code, 404)
+
+    def test_unenrolled_rejected(self):
+        from apps.quiz.models import QuestionAnchor
+
+        QuestionAnchor.objects.create(
+            document=self.other_doc, qid="1", page_number=1,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        stranger = User.objects.create_user("stranger", password="test-pass-123")
+        client = APIClient()
+        client.force_authenticate(stranger)
+        response = client.get(f"/api/quiz/paper/{self.other_doc.id}/page/1/parts/")
+        self.assertEqual(response.status_code, 403)
+
+
 class TaggingTests(TestCase):
     """Free-tier tagging: Zen first, OpenRouter fallback, then raise."""
 
