@@ -511,6 +511,63 @@ class SmartSummaryView(APIView):
         return Response(session_summary(session))
 
 
+class ExamDurationsView(APIView):
+    """GET ?subject_id=N -> per-paper durations/weights for timed sittings.
+
+    Cached sources only (never builds): the ExamProposition if present, else
+    cached per-paper blueprints, else defaults (Paper 1 = 45 min, rest 120).
+    Papers listed are the subject's real past papers, so the app can time an
+    exam by the paper's written duration.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from .models import ExamBlueprint, ExamProposition
+
+        try:
+            subject = Subject.objects.get(pk=request.query_params.get("subject_id"))
+        except Subject.DoesNotExist:
+            return Response({"detail": "Unknown subject_id"}, status=400)
+        if Enrollment.objects.filter(student=request.user, subject=subject).first() is None:
+            return Response(
+                {"detail": "Enroll in this subject first"},
+                status=403,
+            )
+        numbers = sorted({
+            n for n in SyllabusDocument.objects.filter(
+                subject=subject, doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            ).values_list("paper_number", flat=True) if n
+        }) or [1, 2]
+
+        prop = {
+            p.get("paper_number"): p
+            for p in (ExamProposition.objects.filter(
+                subject=subject).first().data.get("papers", [])
+                if ExamProposition.objects.filter(subject=subject).exists() else [])
+        }
+        blueprints = {
+            b.paper_number: b.data
+            for b in ExamBlueprint.objects.filter(subject=subject)
+        }
+        out = []
+        for n in numbers:
+            entry = prop.get(n) or {}
+            duration = entry.get("duration_minutes")
+            if not duration and n in blueprints:
+                try:
+                    duration = int(blueprints[n].get("duration_minutes") or 0) or None
+                except (TypeError, ValueError):
+                    duration = None
+            out.append({
+                "paper_number": n,
+                "label": entry.get("label") or f"Paper {n}",
+                "duration_minutes": duration or (45 if n == 1 else 120),
+                "weight_pct": entry.get("weight_pct"),
+            })
+        return Response({"papers": out})
+
+
 # --------------------------------------------------------------------------
 # Past-paper crops: exact scanned questions (text + diagram + table as one).
 # --------------------------------------------------------------------------

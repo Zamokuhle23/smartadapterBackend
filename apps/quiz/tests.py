@@ -207,6 +207,52 @@ class ExamFlowTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class ExamDurationsTests(TestCase):
+    """Timed sittings use each paper's real duration (cached, never built)."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+        self.user = User.objects.create_user("timer", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        from apps.syllabus.models import SyllabusDocument
+
+        for n in (1, 2, 4):
+            SyllabusDocument.objects.create(
+                syllabus=self.syllabus, subject=self.subject,
+                title=f"QP P{n}", doc_type=SyllabusDocument.DocType.PAST_PAPER,
+                source=SyllabusDocument.Source.EGCSE, year=2024,
+                paper_number=n)
+
+    def test_lists_real_papers_with_defaults(self):
+        body = self.client.get(
+            f"/api/quiz/exam/durations/?subject_id={self.subject.id}").json()
+        self.assertEqual(
+            [p["paper_number"] for p in body["papers"]], [1, 2, 4])
+        by_no = {p["paper_number"]: p for p in body["papers"]}
+        self.assertEqual(by_no[1]["duration_minutes"], 45)
+        self.assertEqual(by_no[4]["duration_minutes"], 120)
+
+    def test_proposition_durations_win(self):
+        from apps.quiz.models import ExamProposition
+
+        ExamProposition.objects.create(subject=self.subject, data={"papers": [
+            {"paper_number": 2, "label": "Paper 2", "weight_pct": 50,
+             "format": "structured", "duration_minutes": 90,
+             "igcse_equivalent_papers": [2]},
+            {"paper_number": 4, "label": "Paper 4 (Practical)",
+             "weight_pct": 50, "format": "practical", "duration_minutes": 60,
+             "igcse_equivalent_papers": [5]},
+        ]})
+        body = self.client.get(
+            f"/api/quiz/exam/durations/?subject_id={self.subject.id}").json()
+        by_no = {p["paper_number"]: p for p in body["papers"]}
+        self.assertEqual(by_no[2]["duration_minutes"], 90)
+        self.assertEqual(by_no[4]["duration_minutes"], 60)
+        self.assertEqual(by_no[4]["weight_pct"], 50)
+
+
 class StructuredAnswerTests(TestCase):
     def setUp(self):
         syllabus, self.subject, obj = make_maths()

@@ -10,6 +10,7 @@ from apps.progress.api import DashboardView, RecordAttemptView, WorkspaceView
 from apps.quiz.api import (
     AnswerQuizView,
     CropAnswerView,
+    ExamDurationsView,
     ExamNextView,
     ExamStateView,
     GenerateQuizView,
@@ -81,6 +82,7 @@ urlpatterns = [
     path("api/quiz/page-topics/", PageTopicsView.as_view(),
          name="page-topics"),
     path("api/quiz/exam/start/", StartExamView.as_view(), name="exam-start"),
+    path("api/quiz/exam/durations/", ExamDurationsView.as_view(), name="exam-durations"),
     path("api/quiz/exam/<int:pk>/", ExamStateView.as_view(), name="exam-state"),
     path("api/quiz/exam/<int:pk>/next/", ExamNextView.as_view(), name="exam-next"),
     path("api/quiz/smart/start/", SmartStartView.as_view(), name="smart-start"),
