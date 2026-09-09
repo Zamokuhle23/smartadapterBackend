@@ -653,6 +653,8 @@ _DOT_RUN = re.compile(r"[.?·•\-_]{4,}")
 _TOTAL_LINE = re.compile(r"\[total\s*:\s*\d+\]", re.IGNORECASE)
 _SESSION_CODE = re.compile(r"\b\d{4}/\d{2}/[A-Z]/[A-Z]/\d{4}\b")
 _EXAM_BOARD_LINE = re.compile(r"^\s*ECESWA\s+\d{4}\s*$", re.IGNORECASE)
+# Stray control chars the extractor emits for bullets/dots (e.g. \x07).
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def clean_part_text(text: str) -> str:
@@ -665,6 +667,7 @@ def clean_part_text(text: str) -> str:
         return ""
     out_lines = []
     for line in text.splitlines():
+        line = _CONTROL_CHARS.sub("", line)
         line = line.replace("\t", " ").strip()
         line = _DOT_RUN.sub("", line)
         line = _TOTAL_LINE.sub("", line)

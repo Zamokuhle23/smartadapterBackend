@@ -884,11 +884,14 @@ class PaperPagePartsTests(TestCase):
 
         raw = ("(ii)\t.Explain why bubbles were seen.\n"
                "????????????????????????????????????\n"
+               + chr(7) + "bullets\n"
                "ECESWA 2023\n6884/04/O/N/2023\n[Total: 20]")
         cleaned = clean_part_text(raw)
         self.assertIn("(ii)", cleaned)
         self.assertIn("Explain why bubbles were seen.", cleaned)
+        self.assertIn("bullets", cleaned)
         self.assertNotIn("?", cleaned)
+        self.assertNotIn(chr(7), cleaned)
         self.assertNotIn("Total", cleaned)
         self.assertNotIn("6884/04", cleaned)
 
@@ -898,7 +901,9 @@ class PaperPagePartsTests(TestCase):
         from apps.quiz.models import QuizQuestion
         from apps.quiz.services.smart import generate_part_variants
 
-        payload = ('[{"qid": "4a", "question": "Define an angle.", "marks": 2,'
+        # Wrong qid on purpose (models renumber parts): positional fallback
+        # must still attach the variant to the anchor.
+        payload = ('[{"qid": "9z", "question": "Define an angle.", "marks": 2,'
                    ' "marking_guidance": "One mark for definition."}]')
         with patch("apps.quiz.services.smart._chat", return_value=payload), patch(
             "apps.quiz.services.smart.anchor_text",

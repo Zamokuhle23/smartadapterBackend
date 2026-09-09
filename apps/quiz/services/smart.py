@@ -176,6 +176,8 @@ HARD RULES:
 - Text only: NEVER mention or require any diagram, figure, table, graph,
   image or data not printed in the question itself.
 - Keep the same marks as the original part (shown in brackets).
+- Copy each part's [qid] EXACTLY into its item (e.g. 1e, 1ii) - never invent
+  new numbers.
 - Reply with ONLY a JSON array, no fences:
   [{{"qid": "4a", "question": "...", "marks": 2, "marking_guidance": "..."}}]
   marking_guidance = short model answer + how marks are awarded.
@@ -242,10 +244,13 @@ def generate_part_variants(doc, page_no: int) -> dict[str, QuizQuestion]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        qid = str(item.get("qid", ""))
-        anchor = by_qid.get(qid)
         question_text = str(item.get("question", "")).strip()
-        if anchor is None or not question_text:
+        if not question_text:
+            continue
+        anchor = by_qid.get(str(item.get("qid", "")))
+        if anchor is None or anchor.qid in made:
+            anchor = next((a for a, _, _ in todo if a.qid not in made), None)
+        if anchor is None:
             continue
         if _is_bare_diagram_reference_text(question_text):
             continue
@@ -253,7 +258,7 @@ def generate_part_variants(doc, page_no: int) -> dict[str, QuizQuestion]:
             marks = max(1, min(25, int(item.get("marks") or 2)))
         except (TypeError, ValueError):
             marks = 2
-        made[qid] = QuizQuestion.objects.create(
+        made[anchor.qid] = QuizQuestion.objects.create(
             subject=doc.subject,
             objective=objective,
             topic_title=label,
