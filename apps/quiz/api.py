@@ -403,6 +403,115 @@ class ExamNextView(APIView):
 
 
 # --------------------------------------------------------------------------
+# Smart practice: question-by-question mix of text-only paper parts + AI variants
+# --------------------------------------------------------------------------
+
+
+def _enrolled_or_404(user, subject_id):
+    try:
+        subject = Subject.objects.select_related("syllabus").get(pk=subject_id)
+    except Subject.DoesNotExist:
+        return None, Response({"detail": "Unknown subject_id"}, status=400)
+    if Enrollment.objects.filter(student=user, subject=subject).first() is None:
+        return None, Response(
+            {"detail": "Enroll in this subject before practising"}, status=403)
+    return subject, None
+
+
+class SmartStartView(APIView):
+    """POST {subject_id, topics?, count?} -> new smart practice session."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from apps.syllabus.services.subject_map import tier_for
+
+        subject, err = _enrolled_or_404(request.user, request.data.get("subject_id"))
+        if err:
+            return err
+        topics = request.data.get("topics") or []
+        if isinstance(topics, str):
+            topics = [topics]
+        topics = [t.strip() for t in topics if t.strip()]
+        try:
+            count = int(request.data.get("count", 20))
+        except (TypeError, ValueError):
+            count = 20
+        from .services.smart import start_smart_session
+        session = start_smart_session(
+            request.user, subject, topics, count=count,
+            tier=tier_for(request.user, subject))
+        return Response({"session_id": session.id, "total_questions": session.total_questions},
+                        status=201)
+
+
+class SmartNextView(APIView):
+    """POST /api/quiz/smart/<id>/next/ -> next item (anchor or variant)."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "llm"
+
+    def post(self, request, pk):
+        from apps.syllabus.services.subject_map import tier_for
+
+        from .models import PracticeSession
+        from .services.smart import serve_next
+
+        session = PracticeSession.objects.filter(pk=pk, student=request.user).first()
+        if session is None:
+            return Response({"detail": "Not found"}, status=404)
+        tier = tier_for(request.user, session.subject)
+        item = serve_next(session, tier=tier)
+        if item is None:
+            return Response(None, status=204)
+        return Response(item)
+
+
+class SmartAnswerView(APIView):
+    """POST {index, answer_text? | selected_index? | drawing?, latency_ms?}."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "llm"
+
+    def post(self, request, pk):
+        from apps.syllabus.services.subject_map import tier_for
+
+        from .models import PracticeSession
+        from .services.smart import answer_item
+
+        session = PracticeSession.objects.filter(pk=pk, student=request.user).first()
+        if session is None:
+            return Response({"detail": "Not found"}, status=404)
+        try:
+            index = int(request.data.get("index"))
+        except (TypeError, ValueError):
+            return Response({"detail": "index required"}, status=400)
+        result, code = answer_item(
+            session, index, request.data,
+            tier=tier_for(request.user, session.subject))
+        if code != 200:
+            return Response(result, status=code)
+        return Response(result)
+
+
+class SmartSummaryView(APIView):
+    """GET /api/quiz/smart/<id>/summary/ -> compiled answers for review."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, pk):
+        from .models import PracticeSession
+        from .services.smart import session_summary
+
+        session = PracticeSession.objects.filter(pk=pk, student=request.user).first()
+        if session is None:
+            return Response({"detail": "Not found"}, status=404)
+        return Response(session_summary(session))
+
+
+# --------------------------------------------------------------------------
 # Past-paper crops: exact scanned questions (text + diagram + table as one).
 # --------------------------------------------------------------------------
 

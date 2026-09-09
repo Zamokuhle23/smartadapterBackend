@@ -104,6 +104,28 @@ Return ONLY valid JSON, no fences:
 "format": "structured"}}]}}
 Sections must cover the whole paper (weights summing to ~100)."""
 
+EXAM_PROPOSITION_PROMPT = """You are an Eswatini examinations specialist who knows the
+ECESWA {level} {subject_name} ({subject_code}) assessment scheme in detail.
+
+ASSESSMENT-SCHEME CONTEXT from this subject's official syllabus:
+{context}
+
+Describe how this subject is ASSESSED at final examination level so an app can
+mirror the exam proportion in practice:
+- Every paper that contributes to the final grade, with its contribution
+  percentage (e.g. a practical paper contributing 10% -> weight_pct = 10).
+- Each paper's format ("mcq" | "structured" | "practical"), duration in minutes,
+  and its CAMBRIDGE IGCSE equivalent paper number(s) (the EGCSE paper is often a
+  mirror of a specific IGCSE paper; IGCSE may have a different count of papers,
+  e.g. EGCSE 4 papers vs IGCSE 3, or vice versa). If you cannot determine an
+  equivalent, use the same paper number.
+- If this subject is tiered, only list the papers of the {tier_text}.
+
+Return ONLY valid JSON, no fences:
+{{"papers": [{{"paper_number": 4, "label": "Paper 4 (Practical)", "weight_pct": 10,
+"format": "practical", "duration_minutes": 90, "igcse_equivalent_papers": [5]}}]}}
+Weights must sum to ~100 across the listed papers."""
+
 EXAM_QUESTION_PROMPT = """You are an experienced Eswatini {level} examiner setting
 {paper_label} for {subject_name} (ECESWA code {subject_code}). This is a simulated
 exam sitting - questions must look exactly like real {paper_label} items.
@@ -883,6 +905,127 @@ def start_exam_session(user, subject, paper_number: int = 1, tier: str = "") -> 
         total_questions=blueprint.get("total_questions", 1),
         plan={**blueprint, "tier": tier or blueprint.get("tier", ""), "queue": _flatten_queue(blueprint)},
     )
+
+
+def get_exam_proposition(subject, tier: str = "") -> dict:
+    """Cached exam structure: papers with contribution % + IGCSE equivalents.
+
+    Establishes, once per subject, how each EGCSE paper contributes to the
+    final grade and which Cambridge IGCSE paper(s) it mirrors, so practice can
+    sample papers in the same proportion as the real examination.
+    """
+    from ..models import ExamProposition
+
+    cached = ExamProposition.objects.filter(subject=subject).first()
+    if cached:
+        return dict(cached.data)
+
+    from apps.syllabus.services.subject_map import tier_label, tier_papers
+
+    papers_hint = tier_papers(tier) if tier else None
+    tier_text = tier_label(tier) if tier else "full subject (all papers)"
+    if papers_hint:
+        tier_text += f" - only papers {', '.join(map(str, papers_hint))}"
+
+    context_chunks = retrieve(
+        subject.syllabus,
+        f"{subject.name} ({subject.code}) assessment scheme final grade "
+        f"paper contributions percentages practical alternative to practical "
+        f"igcse equivalence structure",
+        k=10,
+        subject=subject,
+    )
+    context_chunks = _filter_chunks_by_tier(context_chunks, tier)
+    data = None
+    try:
+        raw = _chat(
+            [
+                {"role": "system", "content": "You describe exam structures precisely. Output ONLY valid JSON."},
+                {"role": "user", "content": EXAM_PROPOSITION_PROMPT.format(
+                    level=subject.syllabus.get_level_display(),
+                    subject_name=subject.name,
+                    subject_code=subject.code,
+                    context=_build_context(context_chunks)[:4000] or "(no indexed corpus)",
+                    tier_text=tier_text,
+                )},
+            ]
+        )
+        data = _extract_json_object(raw)
+    except QuizGenerationError:
+        data = None
+
+    papers = _normalise_proposition(subject, data, tier, papers_hint)
+    ExamProposition.objects.update_or_create(
+        subject=subject, defaults={"data": papers})
+    return papers
+
+
+def _normalise_proposition(subject, data: dict | None, tier: str,
+                           papers_hint: list | None) -> dict:
+    """Sanitise the LLM proposition (or equal-split fallback across papers)."""
+
+    def fallback() -> list:
+        nums = papers_hint or [1, 2, 3, 4]
+        per = round(100 / len(nums), 1)
+        return [
+            {
+                "paper_number": n,
+                "label": f"Paper {n}",
+                "weight_pct": per if i < len(nums) - 1 else 100 - per * (len(nums) - 1),
+                "format": "mcq" if n == 1 else "structured",
+                "duration_minutes": 45 if n == 1 else 120,
+                "igcse_equivalent_papers": [n],
+            }
+            for i, n in enumerate(nums)
+        ]
+
+    if not isinstance(data, dict) or not data.get("papers"):
+        return {"papers": fallback()}
+
+    papers = []
+    allowed = set(papers_hint) if papers_hint else None
+    for p in data["papers"]:
+        if not isinstance(p, dict):
+            continue
+        try:
+            number = int(p.get("paper_number"))
+        except (TypeError, ValueError):
+            continue
+        if allowed is not None and number not in allowed:
+            continue
+        if not (1 <= number <= 6):
+            continue
+        fmt = str(p.get("format", "structured")).lower()
+        if fmt not in ("mcq", "structured", "practical"):
+            fmt = "structured"
+        try:
+            weight = float(p.get("weight_pct"))
+        except (TypeError, ValueError):
+            weight = 0.0
+        if weight <= 0:
+            continue
+        try:
+            duration = int(p.get("duration_minutes"))
+        except (TypeError, ValueError):
+            duration = 120
+        eq = p.get("igcse_equivalent_papers") or [number]
+        eq = [int(x) for x in eq if str(x).isdigit() and 1 <= int(x) <= 6]
+        papers.append({
+            "paper_number": number,
+            "label": str(p.get("label") or f"Paper {number}")[:60],
+            "weight_pct": round(weight, 1),
+            "format": fmt,
+            "duration_minutes": max(15, min(240, duration)),
+            "igcse_equivalent_papers": eq or [number],
+        })
+    if not papers:
+        return {"papers": fallback()}
+    # Normalise weights to sum ~100.
+    total = sum(p["weight_pct"] for p in papers)
+    if total > 0:
+        for p in papers:
+            p["weight_pct"] = round(100 * p["weight_pct"] / total, 1)
+    return {"papers": papers}
 
 
 def next_exam_question(session: ExamSession) -> QuizQuestion | None:

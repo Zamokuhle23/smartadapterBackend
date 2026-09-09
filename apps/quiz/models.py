@@ -40,6 +40,11 @@ class QuizQuestion(models.Model):
     )  # "igcse" (Cambridge, primary) or "egcse" (ECESWA, secondary)
     adapted_from_past_paper = models.BooleanField(default=False)
     source_chunk_ids = models.JSONField(null=True, blank=True)
+    # The past-paper anchor this question is a text-only VARIANT of (null for
+    # fresh syllabus questions). Drives smart-practice variant rotation.
+    source_anchor = models.ForeignKey(
+        "quiz.QuestionAnchor", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="variants")
     figures = models.ManyToManyField(
         "rag.DocumentFigure", blank=True, related_name="questions"
     )
@@ -143,6 +148,10 @@ class QuestionAnchor(models.Model):
     marks = models.PositiveSmallIntegerField(default=2)
     correct_index = models.PositiveSmallIntegerField(null=True, blank=True)
     marking_guidance = models.TextField(blank=True)
+    # True when this anchor needs a diagram/table/picture to answer, so it is
+    # NOT replaceable by a text-only variant (stems with figures stay in
+    # page mode). Backfilled by the backfill_anchor_flags command.
+    requires_figure = models.BooleanField(default=False)
 
     class Meta:
         ordering = ("document_id", "page_number", "qid")
@@ -280,3 +289,58 @@ class QuizAttempt(models.Model):
 
     class Meta:
         ordering = ("-created_at",)
+
+
+class ExamProposition(models.Model):
+    """Cached exam structure for one subject: paper contribution % to the
+    final grade, format, duration, and the IGCSE paper(s) equivalent to each
+    EGCSE paper. Derived once per subject from the syllabus assessment scheme
+    (equal-split fallback). Practice mirrors these proportions.
+    """
+
+    subject = models.ForeignKey(
+        Subject, on_delete=models.CASCADE, related_name="proposition")
+    data = models.JSONField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("subject_id",)
+
+    def __str__(self):
+        return f"Proposition<{self.subject.code}>"
+
+
+class PracticeSession(models.Model):
+    """One smart-practice sitting: a question-by-question mix of text-only
+    past-paper parts and AI variants, sampled by exam paper contribution and
+    blueprint topic weights. Items are served lazily and cached in `items`.
+    """
+
+    class Status(models.TextChoices):
+        IN_PROGRESS = "in_progress", "In progress"
+        COMPLETED = "completed", "Completed"
+
+    student = models.ForeignKey(User, on_delete=models.CASCADE,
+                                related_name="smart_sessions")
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE,
+                                related_name="smart_sessions")
+    topics = models.JSONField(default=list)  # selected subtopic labels
+    total_questions = models.PositiveSmallIntegerField(default=20)
+    # Slot plan: ordered list of paper numbers (sampled by contribution %).
+    plan = models.JSONField(default=list)
+    # Ordered item slots served so far: [{index, kind: anchor|variant,
+    #  anchor_id|question_id, paper_number, paper_label, label("4(a)"),
+    #  marks, answered}]
+    items = models.JSONField(default=list)
+    # An anchor excluded after this many distinct variants are attempted.
+    variant_limit = models.PositiveSmallIntegerField(default=3)
+    status = models.CharField(max_length=12, choices=Status.choices,
+                              default=Status.IN_PROGRESS)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"Smart<{self.student} {self.subject.code}>"

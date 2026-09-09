@@ -1666,3 +1666,111 @@ class SeedFigureQuestionsTests(TestCase):
                          self.subject.code, "--count", "2")
         self.assertEqual(seen.get("force_figure_ids"), [fig.id])
         self.assertEqual(len(seen.get("force_chunks") or []), 1)
+
+class SmartPracticeTests(TestCase):
+    """Question-by-question practice: text-only pool, seen-on-submit rotation."""
+
+    def setUp(self):
+        from apps.quiz.models import PageTopic, PaperAttempt, QuestionAnchor, QuizAttempt, QuizQuestion
+        from apps.syllabus.models import SyllabusDocument
+
+        self.syllabus, self.subject, self.obj = make_maths()
+        self.user = User.objects.create_user("smart", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
+        self.doc = SyllabusDocument.objects.create(
+            syllabus=self.syllabus, subject=self.subject, title="QP Smart",
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            source=SyllabusDocument.Source.EGCSE, year=2024, paper_number=2)
+        self.anchor = QuestionAnchor.objects.create(
+            document=self.doc, qid="4a", page_number=1,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text",
+            confidence=0.9, requires_figure=False)
+        self.diagram_anchor = QuestionAnchor.objects.create(
+            document=self.doc, qid="4b", page_number=1,
+            bbox=[0.0, 210.0, 595.0, 400.0], kind="text",
+confidence=0.9, requires_figure=True)
+        self.draw_anchor = QuestionAnchor.objects.create(
+            document=self.doc, qid="4c", page_number=1,
+            bbox=[0.0, 410.0, 595.0, 500.0], kind="drawing",
+            confidence=0.9, requires_figure=False)
+        PageTopic.objects.create(
+            document=self.doc, page_number=1, label="Algebra", confidence=1.0)
+        # A real PDF so anchor_text/file.path work in tests.
+        import io
+
+        import pymupdf
+        from django.core.files.base import ContentFile
+
+        pdf = pymupdf.open()
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Factorise fully. [2]")
+        buf = io.BytesIO()
+        pdf.save(buf)
+        buf.seek(0)
+        self.doc.file.save("smart.pdf", ContentFile(buf.read()), save=True)
+
+    def _prop(self):
+        return {"papers": [{"paper_number": 2, "weight_pct": 100, "label": "Paper 2"}]}
+
+    def test_pool_excludes_diagrams_and_drawings(self):
+        from apps.quiz.services.smart import _pool_for_paper, _labels_to_topics
+        topics = _labels_to_topics(self.subject, ["Algebra"])
+        pool = _pool_for_paper(self.subject, 2, topics)
+        self.assertEqual([a.id for a in pool], [self.anchor.id])
+
+    def test_serve_next_returns_unseen_anchor(self):
+        from apps.quiz.services.smart import serve_next, start_smart_session
+        with patch("apps.quiz.services.smart.get_exam_proposition", return_value=self._prop()):
+            session = start_smart_session(self.user, self.subject, ["Algebra"], count=2)
+            item = serve_next(session)
+        self.assertEqual(item["kind"], "anchor")
+        self.assertEqual(item["label"], "4a")
+        self.assertEqual(item["paper_number"], 2)
+        self.assertIn("slice", item)
+        self.assertEqual(len(session.items), 1)
+
+    def test_seen_anchor_rotates_to_variant(self):
+        from apps.quiz.models import PaperAttempt
+        from apps.quiz.services.smart import serve_next, start_smart_session
+        from apps.quiz.models import QuizQuestion
+        PaperAttempt.objects.create(student=self.user, anchor=self.anchor,
+                                    answer_text="x", awarded_marks=1, correct=True)
+        variant = QuizQuestion.objects.create(
+            subject=self.subject, format="structured", marks=2,
+            question_text="Factorise another expression.",
+            marking_guidance="model", source_anchor=self.anchor)
+        with patch("apps.quiz.services.smart.get_exam_proposition", return_value=self._prop()), \
+                patch("apps.quiz.services.smart._generate_text_variant", return_value=variant):
+            session = start_smart_session(self.user, self.subject, ["Algebra"], count=2)
+            item = serve_next(session)
+        self.assertEqual(item["kind"], "variant")
+        self.assertEqual(item["question"]["id"], variant.id)
+        self.assertEqual(item["anchor_id"], self.anchor.id)
+        self.assertIn("slice", item)
+
+    def test_variant_limit_stops_repeats(self):
+        from apps.quiz.models import PaperAttempt, QuizAttempt, QuizQuestion
+        from apps.quiz.services.smart import serve_next, start_smart_session
+        PaperAttempt.objects.create(student=self.user, anchor=self.anchor,
+                                    answer_text="x", awarded_marks=1, correct=True)
+        for i in range(3):
+            q = QuizQuestion.objects.create(
+                subject=self.subject, format="structured", marks=2,
+                question_text=f"variant {i}", source_anchor=self.anchor)
+            QuizAttempt.objects.create(student=self.user, question=q, correct=True)
+        with patch("apps.quiz.services.smart.get_exam_proposition", return_value=self._prop()), \
+                patch("apps.quiz.services.smart._generate_text_variant",
+                      return_value=None) as gen:
+            session = start_smart_session(self.user, self.subject, ["Algebra"], count=2)
+            item = serve_next(session)
+        # Anchor dropped after 3 variants: a syllabus-only fallback (no source anchor).
+        self.assertIsNotNone(item)
+        self.assertEqual(item["kind"], "variant")
+        self.assertIsNone(item["anchor_id"])
+
+    def test_proposition_fallback_equal_split(self):
+        from apps.quiz.services.generator import _normalise_proposition
+        prop = _normalise_proposition(self.subject, None, "", None)
+        self.assertIn("papers", prop)
+        self.assertAlmostEqual(
+            sum(p["weight_pct"] for p in prop["papers"]), 100, delta=1)

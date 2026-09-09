@@ -21,6 +21,10 @@ from apps.quiz.api import (
     PaperAnswerView,
     PaperExplainView,
     PracticePagesView,
+    SmartAnswerView,
+    SmartNextView,
+    SmartStartView,
+    SmartSummaryView,
     StartExamView,
 )
 from apps.syllabus.api import (
@@ -76,6 +80,10 @@ urlpatterns = [
     path("api/quiz/exam/start/", StartExamView.as_view(), name="exam-start"),
     path("api/quiz/exam/<int:pk>/", ExamStateView.as_view(), name="exam-state"),
     path("api/quiz/exam/<int:pk>/next/", ExamNextView.as_view(), name="exam-next"),
+    path("api/quiz/smart/start/", SmartStartView.as_view(), name="smart-start"),
+    path("api/quiz/smart/<int:pk>/next/", SmartNextView.as_view(), name="smart-next"),
+    path("api/quiz/smart/<int:pk>/answer/", SmartAnswerView.as_view(), name="smart-answer"),
+    path("api/quiz/smart/<int:pk>/summary/", SmartSummaryView.as_view(), name="smart-summary"),
     path("api/", include(router.urls)),
 ]
 

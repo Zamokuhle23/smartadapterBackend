@@ -587,6 +587,57 @@ def anchor_text(doc_path: str, page_number: int, bbox) -> str:
         return page.get_text("text", clip=clip).strip()[:4000]
 
 
+# Signals that an anchor's answer depends on a diagram/table/picture.
+_FIGURE_HINTS = re.compile(
+    r"see diagram|in the diagram|the diagram (shows|below)|diagram below|"
+    r"as shown in (the )?(diagram|fig)|(table|graph|chart|figure|image|"
+    r"photograph|picture|diagram) (below|shows|showing)|"
+    r"using (the |this )?(diagram|table|graph|figure)|"
+    r"following (table|graph|chart|figure|diagram|data)|"
+    r"from (the )?(diagram|table|graph|figure)|"
+    r"the (table|graph|diagram|figure) (below )?gives|"
+    r"refer(ring)? to (the )?(diagram|table|figure)",
+    re.IGNORECASE,
+)
+
+
+def anchor_requires_figure(doc, anchor, _text: str | None = None) -> bool:
+    """True when a past-paper anchor cannot be answered without a figure.
+
+    Conservative: returns True (not replaceable) when the anchor's text
+    mentions a diagram/table/figure, its box overlaps a detected page figure,
+    or the box holds no text at all (image-only).
+    """
+    if anchor.kind != "text":
+        return True
+    from apps.rag.models import DocumentFigure
+
+    # Overlap check against detected page figures.
+    fx0, fy0, fx1, fy1 = (float(v) for v in anchor.bbox[:4])
+    fig_rows = list(DocumentFigure.objects.filter(
+        document_id=doc.id, page_number=anchor.page_number).values_list(
+        "bbox", flat=True))
+    for row in fig_rows:
+        try:
+            a0, b0, a1, b1 = (float(v) for v in row[:4])
+        except (TypeError, ValueError):
+            continue
+        if fx0 < a1 and fx1 > a0 and fy0 < b1 and fy1 > b0:
+            return True
+    # Text signals.
+    text = _text if _text is not None else anchor_text(
+        doc.file.path, anchor.page_number, anchor.bbox)
+    if not text or not text.strip():
+        return True
+    if _FIGURE_HINTS.search(text):
+        return True
+    pipe_lines = [ln for ln in text.splitlines()
+                  if re.match(r"\s*\|.*\|\s*$", ln)]
+    if len(pipe_lines) >= 2 or "```" in text:
+        return True
+    return False
+
+
 def anchor_marks(text: str) -> int | None:
     """Marks printed like [2] at the end of a question, if present."""
     import re
