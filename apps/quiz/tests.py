@@ -1061,8 +1061,12 @@ class TagPagesTests(TestCase):
                    "triangle ABC right-angled")
         _raw_chunk(self.syllabus.id, doc.id, self.subject.id, 1, 2,
                    "solve quadratic equations")
+        # Constrained to the subject tree (Algebra, Geometry from
+        # make_maths): exact titles stored, invented labels rejected
+        # (and retried on the next run, still rejected).
         payloads = iter([
-            '{"subtopic": "Pythagoras theorem", "confidence": 0.9}',
+            '{"subtopic": "Algebra", "confidence": 0.9}',
+            '{"subtopic": "Quadratics", "confidence": 0.8}',
             '{"subtopic": "Quadratics", "confidence": 0.8}',
         ])
         with patch("apps.quiz.management.commands.tag_pages.tagging_chat",
@@ -1071,7 +1075,25 @@ class TagPagesTests(TestCase):
             call_command("tag_pages", "--subject-code", self.subject.code)
         labels = sorted(PageTopic.objects.filter(document=doc).values_list(
             "label", flat=True))
-        self.assertEqual(labels, ["Pythagoras theorem", "Quadratics"])
+        self.assertEqual(labels, ["Algebra"])
+
+    def test_constrained_tag_canonicalises_case(self):
+        from unittest.mock import patch
+
+        from apps.quiz.management.commands.tag_pages import Command
+
+        canonical = {"algebra": "Algebra", "geometry": "Geometry"}
+        target = "apps.quiz.management.commands.tag_pages.tagging_chat"
+        with patch(target, return_value='{"subtopic": "ALGEBRA", "confidence": 0.7}'):
+            label, conf = Command._tag("Maths", "some text", canonical)
+        self.assertEqual(label, "Algebra")
+        self.assertAlmostEqual(conf, 0.7)
+        with patch(target, return_value='{"subtopic": "NONE", "confidence": 0.0}'):
+            self.assertEqual(
+                Command._tag("Maths", "cover page", canonical), (None, 0.0))
+        with patch(target, return_value='{"subtopic": "Invented Thing", "confidence": 0.9}'):
+            self.assertEqual(
+                Command._tag("Maths", "some text", canonical), (None, 0.0))
 
 
 class AnchorFeedTests(TestCase):
