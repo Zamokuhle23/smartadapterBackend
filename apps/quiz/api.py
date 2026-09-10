@@ -1138,24 +1138,35 @@ class PageTopicsView(APIView):
 
     Normalised: case-insensitive dedupe (most common casing wins) and
     non-content labels (blank pages, instructions, formula sheets,
-    working space) excluded.
+    working space) excluded. Only labels on pages that actually carry
+    question anchors in a past paper are listed - otherwise the picker
+    offers topics that practice/pages/?topics=<label> can never serve
+    (404 no_questions) and the learner hits a dead end.
     """
 
     permission_classes = [permissions.IsAuthenticated]
 
     JUNK_LABELS = ("blank", "instruction", "working space", "formula",
-                   "calculator")
+                   "calculator", "answer booklet", "answer lines",
+                   "examiner")
+
 
     def get(self, request):
         try:
             subject = Subject.objects.get(pk=request.query_params.get("subject_id"))
         except Subject.DoesNotExist:
             return Response({"detail": "Unknown subject_id"}, status=400)
-        from django.db.models import Count
+        from django.db.models import Count, F
 
         rows = list(PageTopic.objects.filter(
             document__subject=subject,
-        ).values("label").annotate(pages=Count("id")).order_by("-pages"))
+            document__doc_type=SyllabusDocument.DocType.PAST_PAPER,
+            # Same-page anchor must exist: the topic filter in
+            # PracticePagesView joins anchors to same-page labels, so a
+            # label without anchored pages could never return content.
+            document__anchors__page_number=F("page_number"),
+        ).values("label").annotate(
+            pages=Count("id", distinct=True)).order_by("-pages"))
         grouped = {}
         for row in rows:
             key = (row["label"] or "").strip().lower()

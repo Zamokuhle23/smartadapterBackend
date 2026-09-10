@@ -1105,6 +1105,27 @@ class AnchorFeedTests(TestCase):
         labels = [r["label"] for r in response.json()]
         self.assertIn("Pythagoras theorem", labels)
 
+    def test_topics_list_hides_unanchored_labels(self):
+        # A label on a page with no question anchors can never be served
+        # by practice/pages/?topics=, so the pick-list must not offer it.
+        # (One label per page: orphan goes on bare page 12, junk label on
+        # anchored page 9.)
+        from apps.quiz.models import QuestionAnchor
+        QuestionAnchor.objects.create(
+            document=self.doc, qid="5", page_number=9,
+            bbox=[0.0, 10.0, 595.0, 200.0], kind="text", confidence=0.9)
+        self.PageTopic.objects.create(
+            document=self.doc, page_number=12, label="Orphan topic",
+            confidence=0.9)
+        self.PageTopic.objects.create(
+            document=self.doc, page_number=9,
+            label="Examiner's use answer lines", confidence=0.9)
+        labels = [r["label"] for r in self.client.get(
+            f"/api/quiz/page-topics/?subject_id={self.subject.id}").json()]
+        self.assertIn("Pythagoras theorem", labels)
+        self.assertNotIn("Orphan topic", labels)
+        self.assertNotIn("Examiner's use answer lines", labels)
+
     def test_next_anchor_filtered_and_excluded(self):
         from apps.quiz.models import QuestionAnchor
 
