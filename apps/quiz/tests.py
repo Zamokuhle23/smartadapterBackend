@@ -252,6 +252,14 @@ class ExamDurationsTests(TestCase):
         self.assertEqual(by_no[4]["duration_minutes"], 60)
         self.assertEqual(by_no[4]["weight_pct"], 50)
 
+    def test_no_papers_returns_empty_not_phantoms(self):
+        from apps.syllabus.models import SyllabusDocument
+
+        SyllabusDocument.objects.filter(subject=self.subject).delete()
+        body = self.client.get(
+            f"/api/quiz/exam/durations/?subject_id={self.subject.id}").json()
+        self.assertEqual(body["papers"], [])
+
 
 class StructuredAnswerTests(TestCase):
     def setUp(self):

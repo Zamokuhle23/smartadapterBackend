@@ -517,7 +517,8 @@ class ExamDurationsView(APIView):
     Cached sources only (never builds): the ExamProposition if present, else
     cached per-paper blueprints, else defaults (Paper 1 = 45 min, rest 120).
     Papers listed are the subject's real past papers, so the app can time an
-    exam by the paper's written duration.
+    exam by the paper's written duration. A subject with no past papers
+    returns an empty list (the app shows "No papers yet").
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -538,7 +539,7 @@ class ExamDurationsView(APIView):
             n for n in SyllabusDocument.objects.filter(
                 subject=subject, doc_type=SyllabusDocument.DocType.PAST_PAPER,
             ).values_list("paper_number", flat=True) if n
-        }) or [1, 2]
+        })
 
         prop = {
             p.get("paper_number"): p
