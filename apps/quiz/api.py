@@ -1423,6 +1423,22 @@ class PracticePagesView(APIView):
         for d, p in pairs:
             doc_pages.setdefault(d, set()).add(p)
         anchor_cache = _prefetch_anchor_cache(doc_pages)
+        if topics:
+            # A topic page that begins mid-question would be dropped by
+            # the orphan trimmer below (its stem page wasn't selected),
+            # turning a servable label into a 404. Pull the stem pages
+            # into the run so the question ships with its context. (The
+            # prefetch window already covers these neighbours, so this
+            # stays cache-backed.)
+            for doc_id, selected in list(doc_pages.items()):
+                doc = docs.get(doc_id)
+                if doc is None:
+                    continue
+                for pno in list(selected):
+                    starts_mid, context_pages, _ = question_context(
+                        doc, pno, anchor_cache)
+                    if starts_mid:
+                        doc_pages[doc_id] |= set(context_pages)
         # Prefetch page labels for the selected pages in one query.
         label_map: dict[tuple[int, int], str] = {}
         for doc_id, page_no, lab in PageTopic.objects.filter(

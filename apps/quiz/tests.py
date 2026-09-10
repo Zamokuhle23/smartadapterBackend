@@ -1284,18 +1284,20 @@ class QuestionContinuityTests(TestCase):
         self.assertEqual(pages[1]["context_pages"], [10])
         self.assertTrue(pages[1]["starts_mid_question"])
 
-    def test_orphan_parts_without_stem_are_not_served(self):
-        # Only page 11 is tagged: Q7's stem page 10 is outside the run, so
-        # serving page 11 would spawn "7a" with no context. The run must be
-        # dropped entirely (no questions), never an orphan.
+    def test_orphan_parts_pull_stem_instead_of_404(self):
+        # Only page 11 is tagged: serving it alone would spawn "7a" with
+        # no context. The stem page 10 is pulled into the run so the
+        # question ships whole - never an orphan, never a dead label.
         from apps.quiz.models import PageTopic
         PageTopic.objects.create(
             document=self.doc, page_number=11, label="TargetSeven",
             confidence=1.0)
-        response = self.client.get(
-            f"/api/quiz/practice/pages/?subject_id={self.subject.id}"
-            "&topics=TargetSeven&limit=10")
-        self.assertEqual(response.status_code, 404)
+        pages = self._ordered(topics="TargetSeven", limit=10)
+        self.assertEqual(
+            [(p["page_number"], p["read_only"]) for p in pages],
+            [(10, True), (11, False)])
+        self.assertTrue(pages[1]["starts_mid_question"])
+        self.assertEqual(pages[1]["context_pages"], [10])
 
     def test_single_anchor_carries_stem(self):
         from apps.quiz.models import QuestionAnchor
