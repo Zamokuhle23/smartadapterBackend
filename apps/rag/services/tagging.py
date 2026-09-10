@@ -3,11 +3,11 @@
 Primary: opencode.ai Zen Responses API, model muse-spark-1.3-contributor-free
 (FREE). Contributor tier trains on prompts, so this channel carries ONLY
 public exam/corpus text - never student data or PII.
-Fallback: any free OpenAI-compatible chat model (default minimax-m3:free
-on OpenRouter), same prompt, JSON out.
+Fallback: the app's own configured chat provider with its default model
+(no third-party model id: providers only serve their own deployments).
 
-Zen is IP-restricted in some networks (Cloudflare 1010); the fallback keeps
-local dev working where Zen is unreachable.
+Zen is IP-restricted in some networks (Cloudflare 1010/403); the fallback
+keeps tagging working where Zen is unreachable.
 """
 
 import json
@@ -28,11 +28,6 @@ def _zen_base() -> str:
 def _zen_model() -> str:
     return (getattr(settings, "TAGGING_ZEN_MODEL", "") or
             "muse-spark-1.3-contributor-free")
-
-
-def _fallback_model() -> str:
-    return (getattr(settings, "TAGGING_MODEL", "") or
-            "minimax/minimax-m3:free")
 
 
 def _zen_chat(prompt_text: str) -> str:
@@ -66,14 +61,17 @@ def _zen_chat(prompt_text: str) -> str:
 
 
 def _fallback_chat(prompt_text: str) -> str:
-    """OpenRouter chat/completions with a free model. Raises TaggingError."""
+    """Default chat provider with its own configured model.
+
+    No model override: the provider's deployment (e.g. Azure) only serves
+    its own models, so passing a third-party id (OpenRouter-style) 404s.
+    Raises TaggingError.
+    """
     from apps.rag.services.llm import get_chat_provider
 
     try:
         return get_chat_provider().chat(
-            [{"role": "user", "content": prompt_text}],
-            model=_fallback_model(),
-        )
+            [{"role": "user", "content": prompt_text}])
     except Exception as exc:
         raise TaggingError(f"Fallback tagging failed: {exc}") from exc
 
