@@ -1148,7 +1148,7 @@ class PageTopicsView(APIView):
 
     JUNK_LABELS = ("blank", "instruction", "working space", "formula",
                    "calculator", "answer booklet", "answer lines",
-                   "examiner")
+                   "examiner", "copyright")
 
 
     def get(self, request):
