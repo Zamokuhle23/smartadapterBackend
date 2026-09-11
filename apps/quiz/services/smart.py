@@ -175,6 +175,9 @@ names and context where applicable.
 HARD RULES:
 - Text only: NEVER mention or require any diagram, figure, table, graph,
   image or data not printed in the question itself.
+- Never state, hint, or work the answer inside the question text. The
+  question must be solvable but unsolved - the answer lives ONLY in
+  marking_guidance.
 - Keep the same marks as the original part (shown in brackets).
 - Copy each part's [qid] EXACTLY into its item (e.g. 1e, 1ii) - never invent
   new numbers.
@@ -192,10 +195,13 @@ def generate_part_variants(doc, page_no: int) -> dict[str, QuizQuestion]:
 
     Results persist as QuizQuestion rows linked by source_anchor, so repeat
     views are instant. Parts that already have a variant are skipped.
+    Figure-dependent parts (requires_figure) never get text variants: a
+    text question cannot carry the diagram, so those parts stay PDF-only.
     Returns {qid: QuizQuestion}.
     """
     anchors = list(QuestionAnchor.objects.filter(
-        document=doc, page_number=page_no, kind="text").order_by("qid"))
+        document=doc, page_number=page_no, kind="text",
+        requires_figure=False).order_by("qid"))
     have = {q.source_anchor_id: q for q in QuizQuestion.objects.filter(
         source_anchor__in=[a.id for a in anchors])}
     todo = []

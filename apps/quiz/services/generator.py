@@ -74,6 +74,9 @@ Rules:
 - MCQ: exactly 4 options, only ONE clearly correct, distractors based on real
   misconceptions. Structured: no options array (use []), realistic "marks".
 - "marking_guidance": model answer plus how marks would be awarded (needed for grading).
+- Never state, hint, or work the answer inside the question text or options.
+  The question must be solvable but unsolved - the answer lives ONLY in
+  "marking_guidance"/"explanation".
 - Never invent a paper label or year that is not shown on the source chunk.
 - {figure_line}
 
@@ -601,8 +604,10 @@ def _question_from_item(subject, item: dict, objective, chunks,
 
 _BARE_REFERENCE_RE = re.compile(
     r"see diagram|in the diagram|the diagram (shows|below)|"
+    r"(the|this) (venn )?diagram\b|"
+    r"venn diagram (shows|below|above|given|illustrates)|"
     r"diagram below|as shown in (the )?(diagram|fig)|"
-    r"(table|graph|chart|figure) (below|shows)|data below|"
+    r"(table|graph|chart|figure|histogram) (below|shows)|data below|"
     r"following (table|graph|chart|figure|data)|"
     r"table of values below",
     re.IGNORECASE,

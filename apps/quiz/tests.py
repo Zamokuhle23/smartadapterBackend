@@ -1412,6 +1412,31 @@ class ServeTimeDanglingTests(TestCase):
         self.assertIsNone(next_question_for(self.student, self.subject))
 
 
+class BareReferenceRegexTests(TestCase):
+    """Named-figure phrasing must trip the dangling guard too."""
+
+    def _is(self, text):
+        from apps.quiz.services.generator import _text_has_dangling_reference
+        return _text_has_dangling_reference(text, False)
+
+    def test_venn_phrasings_caught(self):
+        for text in (
+            "The Venn diagram shows the number of learners. Find n(A).",
+            "Use the Venn diagram below to find the shaded region.",
+            "In this diagram, angle x is marked. Calculate it.",
+            "The diagram gives the results. How many passed?",
+        ):
+            self.assertTrue(self._is(text), text)
+
+    def test_answerable_instructions_pass(self):
+        for text in (
+            "Draw a Venn diagram to show the survey results.",
+            "Solve 2x + 3 = 11.",
+            "Triangle ABC has sides 3, 4 and 5. Find its area.",
+        ):
+            self.assertFalse(self._is(text), text)
+
+
 class WarmBankCommandTests(TestCase):
     def setUp(self):
         self.syllabus, self.subject, self.obj = make_maths()
