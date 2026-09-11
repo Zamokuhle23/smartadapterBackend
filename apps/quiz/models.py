@@ -148,6 +148,11 @@ class QuestionAnchor(models.Model):
     marks = models.PositiveSmallIntegerField(default=2)
     correct_index = models.PositiveSmallIntegerField(null=True, blank=True)
     marking_guidance = models.TextField(blank=True)
+    # Atomic mark-scheme criteria for offline grading packs:
+    # [{id: "M1", criterion: "...", max_marks: 1}]. Extracted once from
+    # marking_guidance (server-side); the device matches answers to these
+    # instead of re-deriving structure. Empty until extracted.
+    marking_criteria = models.JSONField(default=list, blank=True)
     # True when this anchor needs a diagram/table/picture to answer, so it is
     # NOT replaceable by a text-only variant (stems with figures stay in
     # page mode). Backfilled by the backfill_anchor_flags command.

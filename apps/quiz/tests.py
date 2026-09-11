@@ -2077,3 +2077,35 @@ confidence=0.9, requires_figure=True)
         self.assertEqual(item["kind"], "anchor")
         self.assertEqual(item["label"], "4a")
         self.assertEqual(item["paper_number"], 2)
+
+
+class AtomicCriteriaTests(TestCase):
+    """Guidance decomposes to exact-sum criteria or nothing at all."""
+
+    def _extract(self, payload, marks=2):
+        from unittest.mock import patch
+
+        from apps.quiz.services.atomic_criteria import extract_criteria
+
+        target = "apps.quiz.services.atomic_criteria._chat"
+        with patch(target, return_value=payload):
+            return extract_criteria("Q?", "some guidance", marks)
+
+    def test_valid_split_accepted(self):
+        out = self._extract(
+            '[{"id": "M1", "criterion": "Correct substitution", "max_marks": 1}, '
+            '{"id": "M2", "criterion": "Correct simplification", "max_marks": 1}]')
+        self.assertEqual(
+            out, [{"id": "M1", "criterion": "Correct substitution", "max_marks": 1},
+                  {"id": "M2", "criterion": "Correct simplification", "max_marks": 1}])
+
+    def test_sum_mismatch_rejected(self):
+        self.assertIsNone(self._extract(
+            '[{"id": "M1", "criterion": "Correct answer", "max_marks": 1}]'))
+
+    def test_empty_and_garbage_rejected(self):
+        self.assertIsNone(self._extract('[]'))
+        self.assertIsNone(self._extract('not json at all'))
+        from apps.quiz.services.atomic_criteria import extract_criteria
+        self.assertIsNone(extract_criteria("Q?", "   ", 2))
+        self.assertIsNone(extract_criteria("Q?", "guidance", 0))
