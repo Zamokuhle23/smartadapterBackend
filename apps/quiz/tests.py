@@ -2096,8 +2096,10 @@ class AtomicCriteriaTests(TestCase):
             '[{"id": "M1", "criterion": "Correct substitution", "max_marks": 1}, '
             '{"id": "M2", "criterion": "Correct simplification", "max_marks": 1}]')
         self.assertEqual(
-            out, [{"id": "M1", "criterion": "Correct substitution", "max_marks": 1},
-                  {"id": "M2", "criterion": "Correct simplification", "max_marks": 1}])
+            out, [{"id": "M1", "criterion": "Correct substitution", "max_marks": 1,
+                   "accept": []},
+                  {"id": "M2", "criterion": "Correct simplification", "max_marks": 1,
+                   "accept": []}])
 
     def test_sum_mismatch_rejected(self):
         self.assertIsNone(self._extract(
@@ -2109,3 +2111,33 @@ class AtomicCriteriaTests(TestCase):
         from apps.quiz.services.atomic_criteria import extract_criteria
         self.assertIsNone(extract_criteria("Q?", "   ", 2))
         self.assertIsNone(extract_criteria("Q?", "guidance", 0))
+
+    def test_accept_values_kept(self):
+        out = self._extract(
+            '[{"id": "M1", "criterion": "Writes 30050", "max_marks": 1, '
+            '"accept": ["30050", "30,050", ""]}]', marks=1)
+        self.assertEqual(out, [{"id": "M1", "criterion": "Writes 30050",
+                                "max_marks": 1, "accept": ["30050", "30,050"]}])
+
+
+class CriteriaMatchTests(TestCase):
+    """Deterministic keyword/numeric matching (no LLM)."""
+
+    def _match(self, answer, accept):
+        from apps.quiz.services.criteria_match import match_criterion
+        return match_criterion(answer, {"id": "M1", "criterion": "c",
+                                        "max_marks": 1, "accept": accept})
+
+    def test_numeric_forms_match(self):
+        self.assertTrue(self._match("The answer is 30,050.", ["30050"]))
+        self.assertTrue(self._match("x = 5930.0", ["5930"]))
+        self.assertFalse(self._match("The answer is 30060.", ["30050"]))
+
+    def test_multi_number_accept_requires_all(self):
+        self.assertTrue(self._match("8 - 4x = 10 so x = -0.5", ["8-4x=10"]))
+        self.assertFalse(self._match("8 and 10 are numbers", ["8-4x=10"]))
+
+    def test_phrase_fallback_and_abstain(self):
+        self.assertTrue(self._match("Mark the MIDPOINT of ST.", ["midpoint"]))
+        self.assertFalse(self._match("Draw a circle.", ["midpoint"]))
+        self.assertIsNone(self._match("anything", []))

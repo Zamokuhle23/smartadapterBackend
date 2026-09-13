@@ -25,6 +25,8 @@ class Command(BaseCommand):
         parser.add_argument("--anchor", type=int, default=0,
                             help="Single anchor id")
         parser.add_argument("--limit", type=int, default=0)
+        parser.add_argument("--refresh", action="store_true",
+                            help="Re-extract even anchors that already have criteria")
 
     def handle(self, *args, **options):
         if options["anchor"]:
@@ -47,7 +49,7 @@ class Command(BaseCommand):
             qs = qs[: options["limit"]]
         done = skipped = failed = 0
         for anchor in qs:
-            if anchor.marking_criteria:
+            if anchor.marking_criteria and not options["refresh"]:
                 skipped += 1
                 continue
             try:

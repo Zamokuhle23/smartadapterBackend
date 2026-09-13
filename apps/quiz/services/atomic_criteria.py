@@ -32,11 +32,17 @@ Rules:
 - "criterion" states the observable evidence in the student's answer
   (<= 30 words), copying numbers and values EXACTLY as written in the
   guidance. Never add points, facts, or methods absent from the guidance.
+- "accept": the exact values/expressions from the guidance that prove the
+  point (numbers like "30050", equations like "8-4x=10", key phrases).
+  A dumb keyword matcher will award the point if ANY accept string (or its
+  numeric value) appears in the student answer - so copy them exactly,
+  no paraphrase. Use [] only when no matchable value exists.
 - If the guidance is vague or the total cannot be split exactly, output [].
 - After the closing ] output NOTHING - no notes, no explanations.
 
 Reply with ONLY a valid JSON array, no fences:
-[{{"id": "M1", "criterion": "...", "max_marks": 1}}]"""
+[{{"id": "M1", "criterion": "...", "max_marks": 1,
+   "accept": ["30050", "30,050"]}}]"""
 
 
 def extract_criteria(question_text: str, guidance: str, marks: int,
@@ -88,7 +94,18 @@ def _validate(items, marks: int) -> list | None:
             return None
         if not crit or mm < 1:
             return None
-        out.append({"id": f"M{i}", "criterion": crit, "max_marks": mm})
+        accept = item.get("accept", [])
+        if accept is None:
+            accept = []
+        if not isinstance(accept, list):
+            return None
+        clean_accept = []
+        for a in accept[:6]:
+            s = str(a).strip()[:80]
+            if s:
+                clean_accept.append(s)
+        out.append({"id": f"M{i}", "criterion": crit, "max_marks": mm,
+                    "accept": clean_accept})
     if sum(c["max_marks"] for c in out) != marks:
         return None
     return out
