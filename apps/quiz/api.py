@@ -1520,3 +1520,124 @@ class PracticePagesView(APIView):
         if not out:
             return Response({"detail": "no_questions"}, status=404)
         return Response({"pages": out})
+
+
+# ---------------------------------------------------------------------------
+# Offline packs: versioned subject bundle for on-device practice/exam/chat.
+# ---------------------------------------------------------------------------
+
+
+class OfflinePackView(APIView):
+    """GET ?subject_id=N -> versioned offline pack JSON.
+
+    Additive endpoint; existing flows untouched. Packs bundle everything the
+    device needs to practise, sit exams and chat with no connectivity:
+    papers (metadata + pdf URLs; the app downloads the PDFs themselves),
+    anchors with cached mark-scheme keys + atomic criteria, page-topic
+    labels, topic tree, RAG chunks (syllabus/notes only, capped), and
+    per-paper durations. Version string changes whenever pack content does.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    CHUNK_LIMIT = 1500
+    CHUNK_TEXT_LIMIT = 1200
+
+    def get(self, request):
+        from apps.rag.models import DocumentChunk
+        from apps.syllabus.models import Topic
+
+        try:
+            subject = Subject.objects.get(pk=request.query_params.get("subject_id"))
+        except Subject.DoesNotExist:
+            return Response({"detail": "Unknown subject_id"}, status=400)
+        if Enrollment.objects.filter(student=request.user, subject=subject).first() is None:
+            return Response(
+                {"detail": "Enroll in this subject before downloading"},
+                status=403,
+            )
+        papers = list(SyllabusDocument.objects.filter(
+            subject=subject,
+            doc_type=SyllabusDocument.DocType.PAST_PAPER,
+        ).order_by("year", "paper_number"))
+        paper_ids = [d.id for d in papers]
+
+        anchors = list(QuestionAnchor.objects.filter(
+            document__subject=subject,
+            document__doc_type=SyllabusDocument.DocType.PAST_PAPER,
+        ).order_by("document_id", "page_number", "qid"))
+        label_map = {}
+        for doc_id, page_no, lab in PageTopic.objects.filter(
+                document__subject=subject).values_list(
+                "document_id", "page_number", "label"):
+            label_map.setdefault((doc_id, page_no), lab)
+
+        chunk_qs = (DocumentChunk.objects.filter(subject=subject)
+                    .order_by("id"))
+        chunk_total = chunk_qs.count()
+        topic_titles = dict(
+            Topic.objects.filter(subject=subject).values_list("id", "title"))
+        chunks = []
+        for doc_id, page_no, text, topic_id, doc_type in (
+                chunk_qs.values_list(
+                    "document_id", "page_number", "text", "topic_id",
+                    "document__doc_type")[: self.CHUNK_LIMIT]):
+            if doc_type not in ("syllabus", "notes", ""):
+                continue
+            chunks.append({
+                "doc_id": doc_id,
+                "page": page_no or 0,
+                "topic": topic_titles.get(topic_id, ""),
+                "text": (text or "")[: self.CHUNK_TEXT_LIMIT],
+            })
+
+        topics = []
+        for t in Topic.objects.filter(subject=subject).order_by("order", "id"):
+            topics.append({
+                "id": t.id,
+                "parent": t.parent_id,
+                "title": t.title,
+                "kind": t.kind,
+            })
+
+        numbers = sorted({d.paper_number for d in papers if d.paper_number})
+        durations = [
+            {"paper_number": n, "duration_minutes": 45 if n == 1 else 120}
+            for n in numbers
+        ]
+        max_anchor = max((a.id for a in anchors), default=0)
+        version = f"{subject.id}.p{len(papers)}.a{len(anchors)}.{max_anchor}.c{chunk_total}"
+
+        return Response({
+            "version": version,
+            "subject": {"id": subject.id, "code": subject.code, "name": subject.name},
+            "papers": [{
+                "doc_id": d.id,
+                "title": d.title,
+                "year": d.year,
+                "paper_number": d.paper_number,
+                "pdf_url": (request.build_absolute_uri(d.file.url)
+                            if d.file else None),
+            } for d in papers],
+            "anchors": [{
+                "id": a.id,
+                "doc_id": a.document_id,
+                "qid": a.qid,
+                "page": a.page_number,
+                "kind": a.kind,
+                "marks": a.marks,
+                "correct_index": a.correct_index,
+                "marking_guidance": a.marking_guidance or "",
+                "marking_criteria": a.marking_criteria or [],
+                "requires_figure": a.requires_figure,
+                "label": label_map.get((a.document_id, a.page_number), ""),
+            } for a in anchors],
+            "page_topics": [
+                {"doc_id": doc_id, "page": page, "label": lab}
+                for (doc_id, page), lab in sorted(label_map.items())
+            ],
+            "topics": topics,
+            "chunks": chunks,
+            "chunks_truncated": chunk_total > len(chunks),
+            "durations": durations,
+        })

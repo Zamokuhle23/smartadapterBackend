@@ -2141,3 +2141,33 @@ class CriteriaMatchTests(TestCase):
         self.assertTrue(self._match("Mark the MIDPOINT of ST.", ["midpoint"]))
         self.assertFalse(self._match("Draw a circle.", ["midpoint"]))
         self.assertIsNone(self._match("anything", []))
+
+
+class OfflinePackTests(TestCase):
+    """Versioned offline pack bundling (additive; no existing flows touched)."""
+
+    def setUp(self):
+        self.syllabus, self.subject, self.obj = make_maths()
+        self.user = User.objects.create_user("packlearner", password="test-pass-123")
+        Enrollment.objects.create(student=self.user, subject=self.subject)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def test_pack_shape_and_version(self):
+        response = self.client.get("/api/quiz/offline/pack/",
+                                   {"subject_id": self.subject.id})
+        self.assertEqual(response.status_code, 200)
+        pack = response.json()
+        for key in ("version", "subject", "papers", "anchors",
+                    "page_topics", "topics", "chunks", "durations"):
+            self.assertIn(key, pack)
+        self.assertTrue(pack["version"].startswith(f"{self.subject.id}."))
+        self.assertEqual(pack["subject"]["code"], self.subject.code)
+
+    def test_pack_requires_enrollment(self):
+        outsider = User.objects.create_user("outsider", password="test-pass-123")
+        client = APIClient()
+        client.force_authenticate(outsider)
+        response = client.get("/api/quiz/offline/pack/",
+                              {"subject_id": self.subject.id})
+        self.assertEqual(response.status_code, 403)
