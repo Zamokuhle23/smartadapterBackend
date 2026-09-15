@@ -1607,7 +1607,40 @@ class OfflinePackView(APIView):
             for n in numbers
         ]
         max_anchor = max((a.id for a in anchors), default=0)
-        version = f"{subject.id}.p{len(papers)}.a{len(anchors)}.{max_anchor}.c{chunk_total}"
+        # v2: anchors carry bboxes + per-page geometry so the device can
+        # render tappable pages with no connectivity (bump forces re-download).
+        version = f"v2-{subject.id}.p{len(papers)}.a{len(anchors)}.{max_anchor}.c{chunk_total}"
+
+        # Page geometry for anchored pages (viewer overlay math on device).
+        anchored_pages = {(a.document_id, a.page_number) for a in anchors}
+        page_geoms = []
+        try:
+            import pymupdf
+        except ImportError:  # noqa: BLE001
+            pymupdf = None
+        if pymupdf is not None:
+            by_doc = {}
+            for doc_id, page_no in anchored_pages:
+                by_doc.setdefault(doc_id, set()).add(page_no)
+            doc_files = {d.id: d.file for d in papers if d.file}
+            for doc_id, pages in by_doc.items():
+                f = doc_files.get(doc_id)
+                if f is None:
+                    continue
+                try:
+                    pdf = pymupdf.open(f.path)
+                except Exception:  # noqa: BLE001 - one bad file skips
+                    continue
+                with pdf:
+                    for page in pdf:
+                        pno = page.number + 1
+                        if pno in pages:
+                            page_geoms.append({
+                                "doc_id": doc_id,
+                                "page": pno,
+                                "width": float(page.rect.width),
+                                "height": float(page.rect.height),
+                            })
 
         return Response({
             "version": version,
@@ -1625,6 +1658,7 @@ class OfflinePackView(APIView):
                 "doc_id": a.document_id,
                 "qid": a.qid,
                 "page": a.page_number,
+                "bbox": list(a.bbox or []),
                 "kind": a.kind,
                 "marks": a.marks,
                 "correct_index": a.correct_index,
@@ -1633,6 +1667,7 @@ class OfflinePackView(APIView):
                 "requires_figure": a.requires_figure,
                 "label": label_map.get((a.document_id, a.page_number), ""),
             } for a in anchors],
+            "pages": page_geoms,
             "page_topics": [
                 {"doc_id": doc_id, "page": page, "label": lab}
                 for (doc_id, page), lab in sorted(label_map.items())

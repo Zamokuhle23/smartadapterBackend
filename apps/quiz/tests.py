@@ -2161,8 +2161,9 @@ class OfflinePackTests(TestCase):
         for key in ("version", "subject", "papers", "anchors",
                     "page_topics", "topics", "chunks", "durations"):
             self.assertIn(key, pack)
-        self.assertTrue(pack["version"].startswith(f"{self.subject.id}."))
+        self.assertTrue(pack["version"].startswith("v2-"))
         self.assertEqual(pack["subject"]["code"], self.subject.code)
+        self.assertIn("pages", pack)
 
     def test_pack_requires_enrollment(self):
         outsider = User.objects.create_user("outsider", password="test-pass-123")
