@@ -1548,8 +1548,9 @@ class OfflinePackView(APIView):
         from apps.syllabus.models import Topic
 
         try:
-            subject = Subject.objects.get(pk=request.query_params.get("subject_id"))
-        except Subject.DoesNotExist:
+            subject = Subject.objects.get(
+                pk=int(request.query_params.get("subject_id")))
+        except (Subject.DoesNotExist, TypeError, ValueError):
             return Response({"detail": "Unknown subject_id"}, status=400)
         if Enrollment.objects.filter(student=request.user, subject=subject).first() is None:
             return Response(
