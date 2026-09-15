@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 
@@ -47,3 +48,24 @@ class SyllabusFilterTests(APITestCase):
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         codes = {s["code"] for s in r.json()["results"]}
         self.assertEqual(codes, {"6880", "6884"})
+
+class IngestContentGuardTests(TestCase):
+    """content_matches quarantines mislabeled downloads."""
+
+    def test_matching_headers_pass(self):
+        from apps.syllabus.management.commands.ingest_new_egcse import content_matches
+        text = " ".join(["6880/01/O/N/2024"] * 10 + ["instruction words"])
+        ok, _ = content_matches(text, "6880")
+        self.assertTrue(ok)
+
+    def test_wrong_subject_rejected(self):
+        from apps.syllabus.management.commands.ingest_new_egcse import content_matches
+        text = " ".join(["6880/01/O/N/2025"] * 20)
+        ok, why = content_matches(text, "6884")
+        self.assertFalse(ok)
+        self.assertIn("6880", why)
+
+    def test_few_codes_abstains(self):
+        from apps.syllabus.management.commands.ingest_new_egcse import content_matches
+        ok, _ = content_matches("spoken transcript with no headers", "6871")
+        self.assertTrue(ok)

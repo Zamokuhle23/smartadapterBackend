@@ -41,6 +41,34 @@ def jaccard(a: set, b: set) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
+
+
+# ECESWA header codes printed on every real paper page ("6880/01/O/N/2024").
+# A file whose filename claims one subject but whose pages carry another's
+# code is a mislabeled download: quarantine it instead of poisoning the
+# subject's RAG/practice/grading corpus (Sept 2026 batch was ~fully
+# scrambled this way).
+_HEADER_CODE_RE = re.compile(r"\b(68[6789]\d|690[245])\b")
+
+
+def content_matches(text: str, code: str) -> tuple[bool, str]:
+    """True when the PDF's own header codes agree with the filename subject.
+
+    Abstains (True) when fewer than 3 code mentions exist (transcripts,
+    oral cards and mark text carry no headers). Otherwise the claimed code
+    must hold at least a 30% share of mentions.
+    """
+    from collections import Counter
+
+    counts = Counter(_HEADER_CODE_RE.findall(text or ""))
+    total = sum(counts.values())
+    if total < 3:
+        return True, "too few codes (%d), abstain" % total
+    mine = counts.get(str(code), 0)
+    if mine / total >= 0.3:
+        return True, "%d/%d headers agree" % (mine, total)
+    top = counts.most_common(2)
+    return False, "headers say %s, filename says %s" % (top, code)
 class Command(BaseCommand):
     help = "Ingest new EGCSE PDFs, adding only documents not already stored (content dedup)"
 
@@ -72,6 +100,7 @@ class Command(BaseCommand):
             files = files[: options["limit"]]
 
         copied = ingested = dup_content = dup_fp = skipped = failed = 0
+        mismatch = 0
         dup_list = []
         new_by_type = []
 
@@ -92,13 +121,20 @@ class Command(BaseCommand):
 
             if fp["doc_type"] in (SyllabusDocument.DocType.PAST_PAPER, SyllabusDocument.DocType.MARK_SCHEME):
                 try:
-                    toks = tokens(extract_text(os.path.join(src, name)))
+                    raw_text = extract_text(os.path.join(src, name))
+                    toks = tokens(raw_text)
                 except Exception as exc:  # noqa: BLE001
                     self.stdout.write(self.style.WARNING(f"  FAIL-extract {name}: {exc}"))
                     continue
                 if not toks:
                     dup_content += 1
                     dup_list.append(("empty", name))
+                    continue
+                ok, why = content_matches(raw_text, code)
+                if not ok:
+                    mismatch += 1
+                    dup_list.append(("content-mismatch", name))
+                    self.stdout.write(self.style.WARNING(f"  MISMATCH {name}: {why}"))
                     continue
                 for _pk, etoks in existing.get((code, fp["doc_type"]), []):
                     if jaccard(toks, etoks) >= 0.55:
@@ -145,7 +181,7 @@ class Command(BaseCommand):
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS(
             f"Done. INGESTED {ingested}, copied {copied}, dup-fingerprint {dup_fp}, "
-            f"dup-content {dup_content}, skipped {skipped}."
+            f"dup-content {dup_content}, content-mismatch {mismatch}, skipped {skipped}."
         ))
         by = Counter(new_by_type)
         self.stdout.write("New by type: " + ", ".join(f"{k}={v}" for k, v in by.items()))
